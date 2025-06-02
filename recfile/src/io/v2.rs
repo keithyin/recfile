@@ -404,7 +404,6 @@ pub struct RffReader {
     io_depth: usize,
     buff_size: usize,
     ring: IoUring,
-    ready4sqe_buffer_indices: FixedSizeStack,
     buffers: Vec<RefCell<Buffer>>,
     buffers_flag: Vec<BufferStatus>,
     data_location: DataLocation, // 即将要读取的 位置和 idx
@@ -439,7 +438,6 @@ impl RffReader {
         let buffers = (0..io_depth)
             .map(|_| RefCell::new(Buffer::new(buff_size, page_size)))
             .collect();
-        let ready4sqe_buffer_indices = FixedSizeStack::new(io_depth).fill_stack();
         Self {
             file,
             file_size,
@@ -447,7 +445,6 @@ impl RffReader {
             io_depth,
             buff_size,
             ring,
-            ready4sqe_buffer_indices,
             buffers,
             buffers_flag,
             data_location: DataLocation::default(),
@@ -524,16 +521,12 @@ impl RffReader {
         }
         // initial state
         if !self.init_flag {
-            while let Some(idx) = self.ready4sqe_buffer_indices.pop() {
-                assert!(self.buffers_flag[idx].ready4sqe());
+            for idx in 0..self.io_depth {
                 self.submmit_read_event(idx);
             }
             self.init_flag = true;
         }
         while self.pending_io > 0 {
-            while let Some(idx) = self.ready4sqe_buffer_indices.pop() {
-                self.submmit_read_event(idx);
-            }
             self.ring
                 .submit_and_wait(1)
                 .expect("Failed to submit and wait");
@@ -600,16 +593,27 @@ mod test {
 
     #[test]
     fn test_rff_rw() {
+        let num_records = 1024 * 1024;
         let named_file = NamedTempFile::new().unwrap();
         let mut writer = super::RffWriter::new_writer(named_file.path(), NonZero::new(2).unwrap());
-        let data = b"Hello, world!";
-        writer.write_serialized_data(data).unwrap();
-        drop(writer);
-        println!("Data written to: {:?}", named_file);
-        let mut reader = super::RffReader::new_reader(named_file.path(), NonZero::new(2).unwrap());
-        while let Some(record) = reader.read_serialized_data() {
-            println!("{}", String::from_utf8_lossy(&record));
+        let data = b"Hello, world! today is a good day.\n";
+
+        for _ in 0..num_records {
+            writer.write_serialized_data(data).unwrap();
         }
+        drop(writer);
+
+        let mut reader = super::RffReader::new_reader(named_file.path(), NonZero::new(2).unwrap());
+        let mut cnt = 0;
+        while let Some(record) = reader.read_serialized_data() {
+            assert_eq!(record, data);
+            cnt += 1;
+        }
+
+        assert_eq!(
+            cnt, num_records,
+            "Number of records read does not match written"
+        );
     }
 
     // #[test]

@@ -37,4 +37,4 @@ bincode={version="2", features = ["derive", "alloc"]}
 
 
 [dependencies.recfile]
-version = "0.1.2"
+version = "0.1.3"
