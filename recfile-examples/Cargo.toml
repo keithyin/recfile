@@ -1,0 +1,40 @@
+[package]
+name = "recfile-examples"
+version = "0.1.0"
+edition = "2024"
+description = "recfile-examples"
+license = "MIT"
+repository  = "https://github.com/keithyin/recfile"
+exclude = [
+    "test_data/*"
+]
+
+[[bin]]
+name = "bam-rff-cvt"
+path = "src/bam-rff-cvt.rs"
+
+[[bin]]
+name = "rff-basic-file-write"
+path = "src/rff-basic-file-write.rs"
+
+[[bin]]
+name = "rffv2-rw-speed"
+path = "src/rffv2-rw-speed.rs"
+
+[[bin]]
+name = "rffv2-simple-read"
+path = "src/rffv2-simple-read.rs"
+
+[dependencies]
+clap={version="4", features=["derive"]}
+rust-htslib = "0.49"
+gskits = "0.15"
+crossbeam = "0.8"
+io-uring = "0.7"
+libc = "0.2"
+bincode={version="2", features = ["derive", "alloc"]}
+
+
+
+[dependencies.recfile]
+version = "0.1.2"
