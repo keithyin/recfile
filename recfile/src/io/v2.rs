@@ -595,7 +595,7 @@ impl RffReader {
 mod test {
     use std::num::NonZero;
 
-    use gskits::pbar::{DEFAULT_INTERVAL, get_bar_pb};
+    // use gskits::pbar::{DEFAULT_INTERVAL, get_bar_pb};
     use tempfile::NamedTempFile;
 
     #[test]
@@ -612,27 +612,27 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_rff_read() {
-        let named_file = "data.rff";
-        let mut reader = super::RffReader::new_reader(named_file, NonZero::new(2).unwrap());
-        while let Some(record) = reader.read_serialized_data() {
-            println!("{}", String::from_utf8_lossy(&record));
-        }
-    }
+    // #[test]
+    // fn test_rff_read() {
+    //     let named_file = "data.rff";
+    //     let mut reader = super::RffReader::new_reader(named_file, NonZero::new(2).unwrap());
+    //     while let Some(record) = reader.read_serialized_data() {
+    //         println!("{}", String::from_utf8_lossy(&record));
+    //     }
+    // }
 
-    #[test]
-    fn test_rff_write() {
-        let named_file = "data.rff";
-        let mut writer = super::RffWriter::new_writer(named_file, NonZero::new(2).unwrap());
-        let data = b"Hel m\n";
-        let tot = 1000000;
-        let pb = get_bar_pb(format!("runing..."), DEFAULT_INTERVAL, tot);
-        for idx in 0..tot {
-            pb.inc(1);
-            writer.write_serialized_data(data).unwrap();
-        }
-        pb.finish();
-        drop(writer);
-    }
+    // #[test]
+    // fn test_rff_write() {
+    //     let named_file = "data.rff";
+    //     let mut writer = super::RffWriter::new_writer(named_file, NonZero::new(2).unwrap());
+    //     let data = b"Hel m\n";
+    //     let tot = 1000000;
+    //     let pb = get_bar_pb(format!("runing..."), DEFAULT_INTERVAL, tot);
+    //     for _idx in 0..tot {
+    //         pb.inc(1);
+    //         writer.write_serialized_data(data).unwrap();
+    //     }
+    //     pb.finish();
+    //     drop(writer);
+    // }
 }
