@@ -182,6 +182,7 @@ impl RffWriter {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .custom_flags(libc::O_DIRECT)
             .open(p.as_ref())
             .unwrap();
