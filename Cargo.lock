@@ -1432,6 +1432,7 @@ dependencies = [
  "bytes",
  "clap",
  "crossbeam",
+ "gas",
  "gskits",
  "io-uring",
  "libc",
