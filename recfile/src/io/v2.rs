@@ -469,14 +469,14 @@ impl RffReader {
         }
     }
 
-    pub fn read_serialized_data_to_buf(&mut self, buf: &mut [u8]) -> Option<()> {
+    pub fn read_serialized_data_to_buf(&mut self, buf: &mut [u8]) -> Option<usize> {
         let record_len = self.read_record_length();
         if record_len == 0 {
             return None; // No more records to read
         }
         assert!(buf.len() >= record_len, "buf too short");
         if let Some(()) = self.read_exact(&mut buf[..record_len]) {
-            Some(())
+            Some(record_len)
         } else {
             None
         }

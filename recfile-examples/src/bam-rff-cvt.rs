@@ -753,6 +753,30 @@ fn gread(cli: &Cli) -> Vec<Vec<u8>> {
     all_data
 }
 
+fn gread2big_buf(cli: &Cli) -> Vec<Vec<u8>> {
+    let in_path = cli.in_path.clone();
+    let in_threads = cli.in_threads;
+    let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
+    let mut bytes = 0;
+    let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
+
+    let instant = Instant::now();
+    let mut all_data = vec![0_u8; 30 * 1024 * 1024 * 1024];
+    // let mut all_data = vec![];
+    while let Some(v) = reader.read_serialized_data_to_buf(&mut all_data[bytes..]) {
+        bytes += v.len();
+        // TODO：这行代码会明显的影响执行速度。 可能是 堆内存分配的问题。后续会尝试 预分配 一个 大空间，是否这问题依旧存在
+        pb.inc(1);
+    }
+    println!("bytes:{}", bytes);
+    pb.finish();
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = bytes as f64 / elapsed;
+    let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
+    println!("Read. MB per second: {:.2}MB/s", mb_per_sec);
+    all_data
+}
+
 
 pub fn gwrite(cli: &Cli, data: Vec<Vec<u8>>) {
     let pb = get_spin_pb(format!("writing {}", cli.out_path), DEFAULT_INTERVAL);
