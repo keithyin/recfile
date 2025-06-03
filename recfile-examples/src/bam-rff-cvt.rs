@@ -740,7 +740,7 @@ fn gread(cli: &Cli) -> Vec<Vec<u8>> {
     // let mut all_data = vec![];
     while let Some(v) = reader.read_serialized_data() {
         bytes += v.len();
-        all_data.push(v);
+        all_data.push(v); // TODO：这行代码会明显的影响执行速度。
         pb.inc(1);
     }
     println!("bytes:{}", bytes);
