@@ -56,13 +56,15 @@ fn vanilla_file_write(cli: &Cli) {
 /// 分配 O_DIRECT 需要的对齐缓冲区
 fn aligned_alloc(size: usize) -> Vec<u8> {
     use std::ptr;
-    let align = 512;
+    let align = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+    // println!("page_size:{}", align)
     let mut ptr: *mut u8 = ptr::null_mut();
     unsafe {
         let ret = libc::posix_memalign(&mut ptr as *mut _ as *mut _, align, size);
         if ret != 0 {
             panic!("posix_memalign failed");
         }
+        assert_eq!(ptr as usize % align, 0, "allocate is not aligned");
         Vec::from_raw_parts(ptr, size, size)
     }
 }
@@ -86,6 +88,7 @@ fn file_write_dio(cli: &Cli) {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
         .open(&cli.out_path)
         .expect("Unable to create file");
@@ -133,7 +136,9 @@ impl AlignedBuffer {
     }
 
     fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.buffer.as_mut_ptr()
+        let ptr = self.buffer.as_mut_ptr();
+        assert!(ptr as usize % 4096 == 0);
+        ptr
     }
 }
 
@@ -163,7 +168,7 @@ impl FixedSizeStack {
 
     fn push(&mut self, item: usize) {
         if self.cur_top < self.stack.capacity() {
-            self.stack.push(item);
+            self.stack[self.cur_top] = item;
             self.cur_top += 1;
         } else {
             panic!("Stack overflow");
@@ -173,7 +178,7 @@ impl FixedSizeStack {
     fn pop(&mut self) -> Option<usize> {
         if self.cur_top > 0 {
             self.cur_top -= 1;
-            self.stack.pop()
+            Some(self.stack[self.cur_top])
         } else {
             None
         }
@@ -195,12 +200,20 @@ MB per second: 6524.73MB/s
 fn file_write_uring1(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
     let mut data = aligned_alloc(data_size);
-    data.iter_mut().for_each(|v| *v = 'A' as u8);
+    data.iter_mut().enumerate().for_each(|(idx, v)| {
+        if (idx + 1) % 2 == 1 {
+            *v = 'A' as u8
+        } else {
+            *v = '\n' as u8
+        }
+    });
+    assert_eq!(data.len(), data_size);
 
     // Open a file in write mode, creating it if it doesn't exist
     let file = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
         .open(&cli.out_path)
         .expect("Unable to create file");
@@ -213,18 +226,26 @@ fn file_write_uring1(cli: &Cli) {
     valid_idx_queue.fill_stack(&vec![7, 6, 5, 4, 3, 2, 1, 0]);
 
     let io_depth = 8;
-    let rio_buffers = vec![RefCell::new(AlignedBuffer::new(buf_size)); io_depth];
+    let rio_buffers = (0..io_depth)
+        .into_iter()
+        .map(|_| RefCell::new(AlignedBuffer::new(buf_size)))
+        .collect::<Vec<_>>();
     let mut ring = IoUring::new(io_depth as u32).expect("Failed to create IoUring");
 
     // init completions
+    let mut sqe_cnt = 0;
+    let mut cqe_cnt = 0;
+    let mut remaining_io = 0;
+
     while start < data.len() {
         // Write data to the file
         let end = std::cmp::min(start + buf_size, data.len());
         if let Some(valid_idx) = valid_idx_queue.pop() {
-            rio_buffers[valid_idx]
+            let remain = rio_buffers[valid_idx]
                 .borrow_mut()
                 .clear_buf()
                 .fill_buffer(&data[start..end]);
+            assert_eq!(remain, 0);
             let write_event = opcode::Write::new(
                 types::Fd(file.as_raw_fd()),
                 rio_buffers[valid_idx].borrow_mut().as_mut_ptr(),
@@ -239,18 +260,31 @@ fn file_write_uring1(cli: &Cli) {
                     .push(&write_event)
                     .expect("Failed to push write event");
             }
+            remaining_io += 1;
             start = end;
+            sqe_cnt += 1;
+            
         } else {
             ring.submit_and_wait(1).unwrap();
             let cqe = ring.completion().next().expect("No completion event");
-            valid_idx_queue.push(cqe.user_data() as usize);
+            let buf_idx = cqe.user_data();
+            valid_idx_queue.push(buf_idx as usize);
+            cqe_cnt += 1;
+            remaining_io -= 1;
         }
     }
-    ring.submit_and_wait(io_depth).unwrap();
+    ring.submit_and_wait(remaining_io).unwrap();
+    while let Some(_cqe) = ring.completion().next() {
+        cqe_cnt += 1;
+    }
+    println!("seq_cnt:{}, cqe_cnt:{}", sqe_cnt, cqe_cnt);
+
+    file.sync_all().expect("Failed to sync file");
+
     drop(file);
 
     let elapsed = instant.elapsed().as_secs_f64();
-    let bytes_per_sec = data_size as f64 / elapsed;
+    let bytes_per_sec = start as f64 / elapsed;
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
     println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 5.7GB/s
 }
@@ -276,6 +310,7 @@ fn file_write_uring2(cli: &Cli) {
     let file = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
         .open(&cli.out_path)
         .expect("Unable to create file");
@@ -284,7 +319,10 @@ fn file_write_uring2(cli: &Cli) {
     let mut start = 0;
     let buf_size = 4 * 1024 * 1024; // 1 MB buffer size
     let instant = Instant::now();
-    let real_buffer = vec![RefCell::new(AlignedBuffer::new(buf_size)); io_depth];
+    let real_buffer = (0..io_depth)
+        .into_iter()
+        .map(|_| RefCell::new(AlignedBuffer::new(buf_size)))
+        .collect::<Vec<_>>();
 
     let mut valid_idx_queue = FixedSizeStack::new(8);
     valid_idx_queue.fill_stack(&vec![7, 6, 5, 4, 3, 2, 1, 0]);
@@ -310,8 +348,7 @@ fn file_write_uring2(cli: &Cli) {
                 .fill_buffer(&data[start..end]);
             let write_event = opcode::Writev::new(
                 types::Fd(file.as_raw_fd()),
-                rio_buffers[valid_idx..valid_idx + 1]
-                    .as_ptr(), // Get the pointer to the first element
+                rio_buffers[valid_idx..valid_idx + 1].as_ptr(), // Get the pointer to the first element
                 // (&rio_buffers[valid_idx]) as *const _,
                 1,
             )

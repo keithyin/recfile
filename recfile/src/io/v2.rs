@@ -39,7 +39,7 @@ impl FixedSizeStack {
 
     pub fn push(&mut self, item: usize) {
         if self.cur_top < self.stack.capacity() {
-            self.stack.push(item);
+            self.stack[self.cur_top] = item;
             self.cur_top += 1;
         } else {
             panic!("Stack overflow");
@@ -49,7 +49,7 @@ impl FixedSizeStack {
     pub fn pop(&mut self) -> Option<usize> {
         if self.cur_top > 0 {
             self.cur_top -= 1;
-            self.stack.pop()
+            Some(self.stack[self.cur_top])
         } else {
             None
         }
