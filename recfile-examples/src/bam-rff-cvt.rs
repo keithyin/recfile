@@ -740,7 +740,8 @@ fn gread(cli: &Cli) -> Vec<Vec<u8>> {
     // let mut all_data = vec![];
     while let Some(v) = reader.read_serialized_data() {
         bytes += v.len();
-        all_data.push(v); // TODO：这行代码会明显的影响执行速度。
+        // TODO：这行代码会明显的影响执行速度。 可能是 堆内存分配的问题。后续会尝试 预分配 一个 大空间，是否这问题依旧存在
+        all_data.push(v); 
         pb.inc(1);
     }
     println!("bytes:{}", bytes);
