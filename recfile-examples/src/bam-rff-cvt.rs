@@ -9,7 +9,7 @@ use std::{
 
 use clap::Parser;
 use crossbeam::channel::{Receiver, Sender};
-use gas::codec::{zstd_block_compress, zstd_block_decompress};
+use gas::codec::{lz4_block_compress, zstd_block_compress, zstd_block_decompress};
 use gskits::{
     gsbam::bam_record_ext::BamRecordExt,
     pbar::{DEFAULT_INTERVAL, get_spin_pb},
@@ -356,6 +356,45 @@ fn enc_worker_with_codec(
     }
 }
 
+fn enc_worker_with_codec_lz4(
+    recv: Receiver<bam::Record>,
+    sender: Sender<Vec<u8>>,
+    batch_size: Option<usize>,
+) {
+    let mut tags = HashSet::new();
+    tags.insert("dw".to_string());
+    tags.insert("ar".to_string());
+    tags.insert("cr".to_string());
+    tags.insert("be".to_string());
+    tags.insert("nn".to_string());
+    tags.insert("wd".to_string());
+    tags.insert("sd".to_string());
+    tags.insert("sp".to_string());
+
+    let batch_size = batch_size.unwrap_or(1);
+    let cfg = get_bincode_cfg();
+    let mut record_batch = BatchReads(vec![]);
+    let mut tot_len = 0;
+    for record in recv {
+        let read = ReadInfo::from_bam_record(&record, None, &tags);
+        record_batch.push(read);
+        if record_batch.len() == batch_size {
+            let serial = bincode::encode_to_vec(&record_batch, cfg).unwrap();
+            tot_len += serial.len();
+
+            sender.send(lz4_block_compress(&serial)).unwrap();
+            record_batch = BatchReads(vec![]);
+        }
+    }
+    println!("len:{}", tot_len);
+
+    if !record_batch.is_empty() {
+        let serial = bincode::encode_to_vec(&record_batch, cfg).unwrap();
+
+        sender.send(lz4_block_compress(&serial)).unwrap();
+    }
+}
+
 fn b2g(cli: &Cli) {
     let out_path = cli.get_out_path();
     println!("{:?}", out_path);
@@ -481,6 +520,45 @@ fn b2g2_with_codec(cli: &Cli) {
                 let batch_size = cli.batch_size.clone();
                 move || {
                     enc_worker_with_codec(recv, sender, batch_size);
+                }
+            });
+        }
+        drop(writer_send);
+        drop(bam_record_recv);
+
+        let mut writer =
+            v2::RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap());
+        let pb = get_spin_pb(format!("writing {:?}", out_path), DEFAULT_INTERVAL);
+        for data in write_recv {
+            let _ = writer.write_serialized_data(&data);
+            pb.inc(1);
+        }
+        pb.finish();
+    });
+}
+
+fn b2g2_with_codec_lz4(cli: &Cli) {
+    let out_path = cli.get_out_path();
+    println!("{:?}", out_path);
+    std::thread::scope(|thread_scope| {
+        let (bam_record_sender, bam_record_recv) = crossbeam::channel::bounded(1000);
+        thread_scope.spawn({
+            let bam_path = cli.in_path.clone();
+            let bam_threads = cli.in_threads;
+            let rep_times = cli.rep_times.clone();
+            move || {
+                bam_reader(&bam_path, bam_threads, bam_record_sender, rep_times);
+            }
+        });
+
+        let (writer_send, write_recv) = crossbeam::channel::bounded(1000);
+        for _ in 0..cli.codec_threads {
+            thread_scope.spawn({
+                let recv = bam_record_recv.clone();
+                let sender = writer_send.clone();
+                let batch_size = cli.batch_size.clone();
+                move || {
+                    enc_worker_with_codec_lz4(recv, sender, batch_size);
                 }
             });
         }
@@ -706,6 +784,7 @@ fn main() {
         "b2g" => b2g(&cli),
         "b2g2" => b2g2(&cli),
         "b2g2-codec" => b2g2_with_codec(&cli),
+        "b2g2-codec-lz4" => b2g2_with_codec_lz4(&cli),
         "g2b" => g2b(&cli),
         "g2b2" => g2b2(&cli),
         "g2b2-codec" => g2b2_with_codec(&cli),
