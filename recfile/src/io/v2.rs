@@ -461,22 +461,40 @@ impl RffReader {
         if record_len == 0 {
             return None; // No more records to read
         }
+        let mut data = vec![0_u8; record_len];
+        if let Some(()) = self.read_exact(&mut data) {
+            Some(data)
+        } else {
+            None
+        }
+    }
 
-        self.read_record(record_len)
+    pub fn read_serialized_data_to_buf(&mut self, buf: &mut [u8]) -> Option<()> {
+        let record_len = self.read_record_length();
+        if record_len == 0 {
+            return None; // No more records to read
+        }
+        assert!(buf.len() >= record_len, "buf too short");
+        if let Some(()) = self.read_exact(&mut buf[..record_len]) {
+            Some(())
+        } else {
+            None
+        }
     }
 
     fn read_record_length(&mut self) -> usize {
         let mut length_buf = [0u8; 8];
-        let data = self.read_record(8);
-        if let Some(data) = data {
-            length_buf.copy_from_slice(&data);
+        if let Some(()) = self.read_exact(&mut length_buf) {
+            usize::from_le_bytes(length_buf)
+        } else {
+            0
         }
-
-        usize::from_le_bytes(length_buf)
     }
 
-    fn read_record(&mut self, record_len: usize) -> Option<Vec<u8>> {
-        let mut data = vec![0u8; record_len];
+    // fn read_exact(&mut self, data)
+
+    fn read_exact(&mut self, data: &mut [u8]) -> Option<()> {
+        let record_len = data.len();
         let mut data_start = 0;
         // println!("buf_idx:{}", self.data_location.buf_idx);
         while data_start < record_len {
@@ -512,7 +530,7 @@ impl RffReader {
             }
         }
 
-        Some(data)
+        Some(())
     }
 
     fn wait_buf_ready4read(&mut self, buf_idx: usize) -> Option<()> {
