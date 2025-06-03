@@ -34,7 +34,9 @@ io-uring = "0.7"
 libc = "0.2"
 bincode={version="2", features = ["derive", "alloc"]}
 
-
+bytes = "1"
 
 [dependencies.recfile]
 version = "0.1.3"
+
+

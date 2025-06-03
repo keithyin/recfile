@@ -4,18 +4,19 @@ use std::{
     ops::{Deref, DerefMut},
     path::{self, Path, PathBuf},
     str::FromStr,
+    time::Instant,
 };
 
 use clap::Parser;
 use crossbeam::channel::{Receiver, Sender};
+use gskits::{
+    gsbam::bam_record_ext::BamRecordExt,
+    pbar::{DEFAULT_INTERVAL, get_spin_pb},
+};
 use recfile::io::{
     get_bincode_cfg,
     v1::{RffReader, RffWriter},
     v2,
-};
-use gskits::{
-    gsbam::bam_record_ext::BamRecordExt,
-    pbar::{DEFAULT_INTERVAL, get_spin_pb},
 };
 use rust_htslib::bam::{self, Read, Record, record::Aux};
 #[derive(Parser, Debug)]
@@ -33,7 +34,7 @@ pub struct Cli {
     #[arg(long = "codec-threads", default_value_t = 4)]
     pub codec_threads: usize,
 
-    #[arg(long = "o-threads", default_value_t = 1)]
+    #[arg(long = "o-threads", default_value_t = 4)]
     pub writer_threads: usize,
 
     #[arg(long = "rep-times", help = "only valid for b2g")]
@@ -357,10 +358,11 @@ fn decode_worker(sender: Sender<bam::Record>, recv: Receiver<Vec<u8>>) {
     }
 }
 
-fn bam_writer<P>(fname: P, recv: Receiver<bam::Record>)
+fn bam_writer<P>(fname: P, recv: Receiver<bam::Record>, bam_threads: Option<usize>)
 where
     P: AsRef<Path>,
 {
+    let bam_threads = bam_threads.unwrap_or(4);
     let mut header = bam::Header::new();
     let mut hd = bam::header::HeaderRecord::new(b"HD");
     hd.push_tag(b"VN", "1.5");
@@ -373,7 +375,7 @@ where
     header.push_record(&hd);
 
     let mut bam_writer = bam::Writer::from_path(&fname, &header, bam::Format::Bam).unwrap();
-    bam_writer.set_threads(4).unwrap();
+    bam_writer.set_threads(bam_threads).unwrap();
     let pb = get_spin_pb(
         format!("writing {}", fname.as_ref().to_str().unwrap()),
         DEFAULT_INTERVAL,
@@ -386,8 +388,7 @@ where
 }
 
 fn g2b(cli: &Cli) {
-    let (reader, recv) =
-        RffReader::new_reader(&cli.in_path, NonZero::new(cli.in_threads).unwrap());
+    let (reader, recv) = RffReader::new_reader(&cli.in_path, NonZero::new(cli.in_threads).unwrap());
     reader.start_read_worker();
     std::thread::scope(|scope| {
         let (decode_sender, decode_recv) = crossbeam::channel::bounded(1000);
@@ -401,7 +402,7 @@ fn g2b(cli: &Cli) {
             });
         }
         drop(decode_sender);
-        bam_writer(&cli.get_out_path(), decode_recv);
+        bam_writer(&cli.get_out_path(), decode_recv, None);
     });
 }
 
@@ -433,7 +434,8 @@ fn b2g2(cli: &Cli) {
         drop(writer_send);
         drop(bam_record_recv);
 
-        let mut writer = v2::RffWriter::new_writer(&out_path, NonZero::new(8).unwrap());
+        let mut writer =
+            v2::RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap());
         let pb = get_spin_pb(format!("writing {:?}", out_path), DEFAULT_INTERVAL);
         for data in write_recv {
             let _ = writer.write_serialized_data(&data);
@@ -449,8 +451,9 @@ fn g2b2(cli: &Cli) {
 
         scope.spawn({
             let in_path = cli.in_path.clone();
+            let threads = cli.in_threads;
             move || {
-                let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(8).unwrap());
+                let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(threads).unwrap());
                 while let Some(v) = reader.read_serialized_data() {
                     read_sender.send(v).unwrap();
                 }
@@ -468,8 +471,110 @@ fn g2b2(cli: &Cli) {
             });
         }
         drop(decode_sender);
-        bam_writer(&cli.get_out_path(), decode_recv);
+        bam_writer(&cli.get_out_path(), decode_recv, Some(cli.writer_threads));
     });
+}
+
+fn b2b(cli: &Cli) {
+    std::thread::scope(|scope| {
+        let (record_sender, record_recv) = crossbeam::channel::bounded(1000);
+        scope.spawn({
+            let bam_path = cli.in_path.clone();
+            let in_threads = cli.in_threads;
+            move || {
+                bam_reader(bam_path, in_threads, record_sender, None);
+            }
+        });
+
+        scope.spawn({
+            let bam_path = cli.out_path.clone();
+            let out_threads = cli.writer_threads;
+            move || {
+                bam_writer(bam_path, record_recv, Some(out_threads));
+            }
+        });
+    });
+}
+
+fn g2g(cli: &Cli) {
+    std::thread::scope(|scope| {
+        let (record_sender, record_recv) = crossbeam::channel::bounded(1000);
+        scope.spawn({
+            let in_path = cli.in_path.clone();
+            let in_threads = cli.in_threads;
+            move || {
+                let mut reader =
+                    v2::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
+                while let Some(v) = reader.read_serialized_data() {
+                    record_sender.send(v).unwrap();
+                }
+            }
+        });
+
+        scope.spawn({
+            let out_path = cli.out_path.clone();
+            let out_threads = cli.writer_threads;
+            move || {
+                let pb = get_spin_pb(format!("writing {}", out_path), DEFAULT_INTERVAL);
+                let mut writer =
+                    v2::RffWriter::new_writer(out_path, NonZero::new(out_threads).unwrap());
+                for v in record_recv {
+                    let _ = writer.write_serialized_data(&v);
+                    pb.inc(1);
+                }
+                pb.finish();
+            }
+        });
+    });
+}
+
+fn gread(cli: &Cli) -> Vec<Vec<u8>> {
+    let in_path = cli.in_path.clone();
+    let in_threads = cli.in_threads;
+    let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
+    let mut bytes = 0;
+    let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
+
+    let instant = Instant::now();
+    let mut all_data: Vec<Vec<u8>> = vec![];
+    // let mut all_data = vec![];
+    while let Some(v) = reader.read_serialized_data() {
+        bytes += v.len();
+        all_data.push(v);
+        pb.inc(1);
+    }
+    println!("bytes:{}", bytes);
+    pb.finish();
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = bytes as f64 / elapsed;
+    let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
+    println!("Read. MB per second: {:.2}MB/s", mb_per_sec);
+    all_data
+}
+
+pub fn gwrite(cli: &Cli, data: Vec<Vec<u8>>) {
+    let pb = get_spin_pb(format!("writing {}", cli.out_path), DEFAULT_INTERVAL);
+    let mut writer =
+        v2::RffWriter::new_writer(&cli.out_path, NonZero::new(cli.writer_threads).unwrap());
+    let mut bytes = 0;
+    let instant = Instant::now();
+
+    for v in data {
+        bytes += v.len();
+        let _ = writer.write_serialized_data(&v);
+        pb.inc(1);
+    }
+    drop(writer);
+    pb.finish();
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = bytes as f64 / elapsed;
+    let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
+    println!("Write. MB per second: {:.2}MB/s", mb_per_sec);
+}
+
+fn g_read_write(cli: &Cli) {
+    let all_data = gread(cli);
+    gwrite(cli, all_data);
 }
 
 fn main() {
@@ -479,6 +584,10 @@ fn main() {
         "b2g2" => b2g2(&cli),
         "g2b" => g2b(&cli),
         "g2b2" => g2b2(&cli),
+        "b2b" => b2b(&cli),
+        "g2g" => g2g(&cli),
+        "gread" => {gread(&cli);},
+        "g_read_write" => g_read_write(&cli),
         mode => panic!("invalid mode. {}. only b2g/g2b are valid", mode),
     };
 }

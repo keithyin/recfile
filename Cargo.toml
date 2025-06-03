@@ -4,3 +4,7 @@ resolver = "3"
 members = [
     "recfile"
     ,"recfile-examples"]
+
+
+[profile.release]
+debug = true
