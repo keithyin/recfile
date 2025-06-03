@@ -21,15 +21,16 @@ pub struct Cli {
 
 /*
   Round 1...
-MB per second: 623.05MB/s
+MB per second: 675.72MB/s
   Round 2...
-MB per second: 737.15MB/s
+MB per second: 758.82MB/s
   Round 3...
-MB per second: 748.09MB/s
+MB per second: 751.05MB/s
   Round 4...
-MB per second: 736.46MB/s
+MB per second: 613.35MB/s
   Round 5...
-MB per second: 742.95MB/s
+MB per second: 749.83MB/s
+
 */
 fn vanilla_file_write(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 10; // 2 GB
@@ -71,15 +72,15 @@ fn aligned_alloc(size: usize) -> Vec<u8> {
 
 /*
   Round 1...
-MB per second: 1471.01MB/s
+MB per second: 3025.75MB/s
   Round 2...
-MB per second: 1604.04MB/s
+MB per second: 3095.02MB/s
   Round 3...
-MB per second: 1740.70MB/s
+MB per second: 3076.54MB/s
   Round 4...
-MB per second: 1487.76MB/s
+MB per second: 3132.42MB/s
   Round 5...
-MB per second: 1384.34MB/s
+MB per second: 3027.08MB/s
 */
 fn file_write_dio(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
@@ -187,15 +188,20 @@ impl FixedSizeStack {
 
 /*
   Round 1...
-MB per second: 6121.26MB/s
+seq_cnt:5120, cqe_cnt:5120
+MB per second: 3149.60MB/s
   Round 2...
-MB per second: 6299.68MB/s
+seq_cnt:5120, cqe_cnt:5120
+MB per second: 3292.42MB/s
   Round 3...
-MB per second: 6547.50MB/s
+seq_cnt:5120, cqe_cnt:5120
+MB per second: 3208.95MB/s
   Round 4...
-MB per second: 6547.28MB/s
+seq_cnt:5120, cqe_cnt:5120
+MB per second: 2979.34MB/s
   Round 5...
-MB per second: 6524.73MB/s
+seq_cnt:5120, cqe_cnt:5120
+MB per second: 2523.44MB/s
 */
 fn file_write_uring1(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
@@ -290,16 +296,17 @@ fn file_write_uring1(cli: &Cli) {
 }
 
 /*
- Round 1...
-MB per second: 5043.00MB/s
+  Round 1...
+MB per second: 2947.43MB/s
   Round 2...
-MB per second: 5100.70MB/s
+MB per second: 3089.93MB/s
   Round 3...
-MB per second: 6494.81MB/s
+MB per second: 2808.95MB/s
   Round 4...
-MB per second: 1474.20MB/s
+MB per second: 2407.47MB/s
   Round 5...
-MB per second: 5077.73MB/s
+MB per second: 3028.88MB/s
+
 */
 fn file_write_uring2(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
