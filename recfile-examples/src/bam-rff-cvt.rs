@@ -9,7 +9,7 @@ use std::{
 
 use clap::Parser;
 use crossbeam::channel::{Receiver, Sender};
-use gas::codec::{lz4_block_compress, zstd_block_compress, zstd_block_decompress};
+use gass::codec::{lz4_block_compress, zstd_block_compress, zstd_block_decompress};
 use gskits::{
     gsbam::bam_record_ext::BamRecordExt,
     pbar::{DEFAULT_INTERVAL, get_spin_pb},
