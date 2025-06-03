@@ -753,6 +753,26 @@ fn gread(cli: &Cli) -> Vec<Vec<u8>> {
     all_data
 }
 
+fn gread_and_drop(cli: &Cli) {
+    let in_path = cli.in_path.clone();
+    let in_threads = cli.in_threads;
+    let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
+    let mut bytes = 0;
+    let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
+
+    let instant = Instant::now();
+    while let Some(v) = reader.read_serialized_data() {
+        bytes += v.len();
+        pb.inc(1);
+    }
+    println!("bytes:{}", bytes);
+    pb.finish();
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = bytes as f64 / elapsed;
+    let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
+    println!("Read. MB per second: {:.2}MB/s", mb_per_sec);
+}
+
 fn gread2big_buf(cli: &Cli) -> Vec<u8> {
     let in_path = cli.in_path.clone();
     let in_threads = cli.in_threads;
@@ -821,6 +841,7 @@ fn main() {
         "gread2big_buf" => {
             gread2big_buf(&cli);
         }
+        "gread-and-drop" => gread_and_drop(&cli),
         "g_read_write" => g_read_write(&cli),
         mode => panic!("invalid mode. {}. only b2g/g2b are valid", mode),
     };
