@@ -508,7 +508,7 @@ impl RffReader {
                 self.data_location.offset = 0;
 
                 self.buffers_flag[buf_idx].set_ready4sqe();
-                self.submmit_read_event(buf_idx);
+                self.submit_read_event(buf_idx);
             }
         }
 
@@ -522,7 +522,7 @@ impl RffReader {
         // initial state
         if !self.init_flag {
             for idx in 0..self.io_depth {
-                self.submmit_read_event(idx);
+                self.submit_read_event(idx);
             }
             self.init_flag = true;
         }
@@ -548,7 +548,7 @@ impl RffReader {
         None
     }
 
-    fn submmit_read_event(&mut self, buf_idx: usize) -> Option<()> {
+    fn submit_read_event(&mut self, buf_idx: usize) -> Option<()> {
         if self.file_offset_of_buffers[buf_idx] >= self.file_size {
             // no more data to read
             return None;
