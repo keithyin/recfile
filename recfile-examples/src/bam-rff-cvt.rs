@@ -780,8 +780,8 @@ fn gread2big_buf(cli: &Cli) -> Vec<u8> {
     let mut bytes = 0;
     let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
 
-    let instant = Instant::now();
     let mut all_data = vec![0_u8; 30 * 1024 * 1024 * 1024];
+    let instant = Instant::now();
     // let mut all_data = vec![];
     while let Some(v) = reader.read_serialized_data_to_buf(&mut all_data[bytes..]) {
         bytes += v;
