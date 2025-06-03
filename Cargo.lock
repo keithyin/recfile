@@ -629,6 +629,15 @@ dependencies = [
 [[package]]
 name = "gas"
 version = "0.1.0"
+dependencies = [
+ "bincode",
+ "crossbeam",
+ "gskits",
+ "lz4_flex",
+ "recfile 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rust-htslib",
+ "zstd",
+]
 
 [[package]]
 name = "getrandom"
@@ -1019,6 +1028,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
 
 [[package]]
+name = "lz4_flex"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75761162ae2b0e580d7e7c390558127e5f01b4194debd6221fd8c207fc80e3f5"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "lzma-sys"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1384,18 +1402,6 @@ checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
 name = "recfile"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c7e54760df3dbd6b3b92f2d16eb0900d25d63856124324a05d756560274cffa"
-dependencies = [
- "bincode",
- "crossbeam",
- "io-uring",
- "libc",
-]
-
-[[package]]
-name = "recfile"
 version = "0.1.5"
 dependencies = [
  "bincode",
@@ -1404,6 +1410,18 @@ dependencies = [
  "io-uring",
  "libc",
  "tempfile",
+]
+
+[[package]]
+name = "recfile"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c2ef0f923520f5359c577e13a3551982673151af10d27b611444a4372cd7b2c"
+dependencies = [
+ "bincode",
+ "crossbeam",
+ "io-uring",
+ "libc",
 ]
 
 [[package]]
@@ -1417,7 +1435,7 @@ dependencies = [
  "gskits",
  "io-uring",
  "libc",
- "recfile 0.1.3",
+ "recfile 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "rust-htslib",
 ]
 
@@ -1583,6 +1601,12 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "statrs"
@@ -1755,6 +1779,16 @@ name = "triple_accel"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22048bc95dfb2ffd05b1ff9a756290a009224b60b2f0e7525faeee7603851e63"
+
+[[package]]
+name = "twox-hash"
+version = "1.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
+dependencies = [
+ "cfg-if",
+ "static_assertions",
+]
 
 [[package]]
 name = "typenum"
@@ -2255,4 +2289,32 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.0.15+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb81183ddd97d0c74cedf1d50d85c8d08c1b8b68ee863bdee9e706eedba1a237"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
