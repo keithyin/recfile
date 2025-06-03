@@ -35,10 +35,8 @@ libc = "0.2"
 bincode={version="2", features = ["derive", "alloc"]}
 
 bytes = "1"
-
+recfile = "0.1.6"
 gass = {path = "../gass"}
 
-[dependencies.recfile]
-version = "0.1.5"
 
 

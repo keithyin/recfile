@@ -1,6 +1,6 @@
 [package]
 name = "gass"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "gass"
 license = "MIT"
@@ -13,8 +13,5 @@ crossbeam = "0.8"
 bincode={version="2", features = ["derive", "alloc"]}
 zstd = "0.13"
 lz4_flex = "0.11"
-
-
-[dependencies.recfile]
-version = "0.1.5"
+recfile = "0.1.6"
 
