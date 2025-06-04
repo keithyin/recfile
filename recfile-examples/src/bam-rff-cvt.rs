@@ -282,6 +282,40 @@ fn bam_reader<P>(
     pb.finish();
 }
 
+fn bam_reader_to_vec<P>(bam_path: P, bam_threads: usize, rep_times: Option<usize>) -> Vec<Record>
+where
+    P: AsRef<Path>,
+{
+    let mut bam_reader = bam::Reader::from_path(&bam_path).expect(&format!("read error"));
+    bam_reader.set_threads(bam_threads).unwrap();
+
+    let pb = get_spin_pb(
+        format!("reading {}", bam_path.as_ref().to_str().unwrap()),
+        DEFAULT_INTERVAL,
+    );
+    let rep_times = rep_times.unwrap_or(1);
+    let mut result = vec![];
+    loop {
+        let mut record = bam::Record::new();
+        if let Some(Ok(_)) = bam_reader.read(&mut record) {
+            for _ in 0..rep_times {
+                let rec = record.clone();
+                pb.inc(1);
+                result.push(rec);
+            }
+
+            if rep_times > 1 {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    pb.finish();
+    return result;
+}
+
 fn enc_worker(recv: Receiver<bam::Record>, sender: Sender<Vec<u8>>, batch_size: Option<usize>) {
     let mut tags = HashSet::new();
     tags.insert("dw".to_string());
@@ -468,6 +502,67 @@ where
 
     let mut bam_writer = bam::Writer::from_path(&fname, &header, bam::Format::Bam).unwrap();
     bam_writer.set_threads(bam_threads).unwrap();
+    let pb = get_spin_pb(
+        format!("writing {}", fname.as_ref().to_str().unwrap()),
+        DEFAULT_INTERVAL,
+    );
+    for record in recv {
+        bam_writer.write(&record).unwrap();
+        pb.inc(1);
+    }
+    pb.finish();
+}
+
+fn bam_writer_from_vec<P>(fname: P, recv: Vec<Record>, bam_threads: Option<usize>)
+where
+    P: AsRef<Path>,
+{
+    let bam_threads = bam_threads.unwrap_or(4);
+    let mut header = bam::Header::new();
+    let mut hd = bam::header::HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.5");
+    hd.push_tag(b"SO", "unknown");
+    header.push_record(&hd);
+
+    let mut hd = bam::header::HeaderRecord::new(b"SQ");
+    hd.push_tag(b"SN", "chr1");
+    hd.push_tag(b"LN", "1234");
+    header.push_record(&hd);
+
+    let mut bam_writer = bam::Writer::from_path(&fname, &header, bam::Format::Bam).unwrap();
+    bam_writer.set_threads(bam_threads).unwrap();
+    let pb = get_spin_pb(
+        format!("writing {}", fname.as_ref().to_str().unwrap()),
+        DEFAULT_INTERVAL,
+    );
+    for record in recv {
+        bam_writer.write(&record).unwrap();
+        pb.inc(1);
+    }
+    pb.finish();
+}
+
+fn bam_writer_from_vec_uncompressed<P>(fname: P, recv: Vec<Record>, bam_threads: Option<usize>)
+where
+    P: AsRef<Path>,
+{
+    let bam_threads = bam_threads.unwrap_or(4);
+    let mut header = bam::Header::new();
+    let mut hd = bam::header::HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.5");
+    hd.push_tag(b"SO", "unknown");
+    header.push_record(&hd);
+
+    let mut hd = bam::header::HeaderRecord::new(b"SQ");
+    hd.push_tag(b"SN", "chr1");
+    hd.push_tag(b"LN", "1234");
+    header.push_record(&hd);
+
+    let mut bam_writer = bam::Writer::from_path(&fname, &header, bam::Format::Bam).unwrap();
+    bam_writer.set_threads(bam_threads).unwrap();
+    bam_writer
+        .set_compression_level(bam::CompressionLevel::Uncompressed)
+        .unwrap();
     let pb = get_spin_pb(
         format!("writing {}", fname.as_ref().to_str().unwrap()),
         DEFAULT_INTERVAL,
@@ -696,6 +791,26 @@ fn b2b(cli: &Cli) {
     });
 }
 
+fn b_read_write(cli: &Cli) {
+    let bam_path = cli.in_path.clone();
+    let in_threads = cli.in_threads;
+    let all_records = bam_reader_to_vec(bam_path, in_threads, None);
+
+    let bam_path = cli.out_path.clone();
+    let out_threads = cli.writer_threads;
+    bam_writer_from_vec(bam_path, all_records, Some(out_threads));
+}
+
+fn b_read_write_uncompressed(cli: &Cli) {
+    let bam_path = cli.in_path.clone();
+    let in_threads = cli.in_threads;
+    let all_records = bam_reader_to_vec(bam_path, in_threads, None);
+
+    let bam_path = cli.out_path.clone();
+    let out_threads = cli.writer_threads;
+    bam_writer_from_vec_uncompressed(bam_path, all_records, Some(out_threads));
+}
+
 fn g2g(cli: &Cli) {
     std::thread::scope(|scope| {
         let (record_sender, record_recv) = crossbeam::channel::bounded(1000);
@@ -780,7 +895,7 @@ fn gread2big_buf(cli: &Cli) -> Vec<u8> {
     let mut bytes = 0;
 
     let mut all_data = vec![0_u8; 30 * 1024 * 1024 * 1024];
-    
+
     let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
     let instant = Instant::now();
     // let mut all_data = vec![];
@@ -839,11 +954,13 @@ fn main() {
         "gread" => {
             gread(&cli);
         }
-        "gread2big_buf" => {
+        "gread2big-buf" => {
             gread2big_buf(&cli);
         }
         "gread-and-drop" => gread_and_drop(&cli),
-        "g_read_write" => g_read_write(&cli),
+        "g-read-write" => g_read_write(&cli),
+        "b-read-write" => b_read_write(&cli),
+        "b-read-write-uncompress" => b_read_write_uncompressed(&cli),
         mode => panic!("invalid mode. {}. only b2g/g2b are valid", mode),
     };
 }

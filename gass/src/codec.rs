@@ -4,7 +4,7 @@ use zstd;
 pub fn zstd_block_compress(input: &[u8]) -> Vec<u8> {
     let compressed = zstd::bulk::compress(input, 6).unwrap();
     let mut final_res = Vec::with_capacity(compressed.len() + 4);
-    final_res.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    final_res.extend_from_slice(&(input.len() as u32).to_le_bytes());
     final_res.extend(&compressed);
     final_res
 }
