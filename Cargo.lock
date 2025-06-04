@@ -634,7 +634,6 @@ dependencies = [
  "crossbeam",
  "gskits",
  "lz4_flex",
- "recfile 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "rust-htslib",
  "zstd",
 ]

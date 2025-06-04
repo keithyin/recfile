@@ -13,5 +13,5 @@ crossbeam = "0.8"
 bincode={version="2", features = ["derive", "alloc"]}
 zstd = "0.13"
 lz4_flex = "0.11"
-recfile = "0.1.7"
+# recfile = "0.1.7"
 
