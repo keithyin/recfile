@@ -406,7 +406,7 @@ fn file_write_uring3(cli: &Cli) {
         .write(true)
         .create(true)
         .truncate(true)
-        .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
+        // .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
         .open(&cli.out_path)
         .expect("Unable to create file");
     let io_depth = 8;
@@ -431,12 +431,14 @@ fn file_write_uring3(cli: &Cli) {
         .collect::<Vec<_>>();
 
     let mut ring = IoUring::new(io_depth as u32).expect("Failed to create IoUring");
-    
+
     unsafe {
         ring.submitter()
             .register_buffers(rio_buffers.as_slice())
             .unwrap();
-        ring.submitter().register_files(&[file.as_raw_fd()]).unwrap();
+        ring.submitter()
+            .register_files(&[file.as_raw_fd()])
+            .unwrap();
     }
 
     // init completions
@@ -447,7 +449,7 @@ fn file_write_uring3(cli: &Cli) {
             let mut buffer = real_buffer[valid_idx].borrow_mut();
             buffer.clear_buf().fill_buffer(&data[start..end]);
             let write_event = opcode::WriteFixed::new(
-                types::Fixed(file.as_raw_fd() as u32),
+                types::Fixed(0),
                 buffer.as_mut_ptr(),
                 buf_size as u32,
                 valid_idx as u16,
@@ -465,12 +467,17 @@ fn file_write_uring3(cli: &Cli) {
         } else {
             ring.submit_and_wait(1).unwrap();
             let cqe = ring.completion().next().expect("No completion event");
-            
+            if cqe.result() < 0 {
+                panic!("cqe result : {}", cqe.result());
+            }
             valid_idx_queue.push(cqe.user_data() as usize);
         }
     }
     ring.submit_and_wait(io_depth).unwrap();
     while let Some(cqe) = ring.completion().next() {
+        if cqe.result() < 0 {
+            panic!("cqe result : {}", cqe.result());
+        }
         let valid_idx = cqe.user_data() as usize;
         real_buffer[valid_idx].borrow_mut().data_size = 0; // Clear the buffer after use
     }
