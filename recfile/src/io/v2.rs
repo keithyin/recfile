@@ -1,138 +1,24 @@
 use std::{
     cell::RefCell,
     fs::{self, OpenOptions},
-    io::{Seek, Write},
+    io::{Read, Seek, Write},
     num::NonZero,
-    ops::{Deref, DerefMut},
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
     path::Path,
 };
 
 use io_uring::{IoUring, opcode, types};
 
-use crate::io::get_page_size;
-
-use super::aligned_alloc;
+use crate::{
+    io::header::RffHeaderV2,
+    util::{
+        buffer::{AlignedVecU8, Buffer},
+        get_page_size,
+        stack::FixedSizeStack,
+    },
+};
 
 const RFF_VERSION: u32 = 2;
-
-#[derive(Debug, Clone)]
-pub struct FixedSizeStack {
-    stack: Vec<usize>,
-    cur_top: usize,
-}
-
-impl FixedSizeStack {
-    pub fn new(size: usize) -> Self {
-        Self {
-            stack: Vec::with_capacity(size),
-            cur_top: 0,
-        }
-    }
-
-    pub fn fill_stack(mut self) -> Self {
-        let cap = self.stack.capacity();
-        (0..cap).into_iter().for_each(|i| {
-            self.stack.push(i);
-        });
-        self.cur_top = cap;
-        self
-    }
-
-    pub fn push(&mut self, item: usize) {
-        if self.cur_top < self.stack.capacity() {
-            self.stack[self.cur_top] = item;
-            self.cur_top += 1;
-        } else {
-            panic!("Stack overflow");
-        }
-    }
-
-    pub fn pop(&mut self) -> Option<usize> {
-        if self.cur_top > 0 {
-            self.cur_top -= 1;
-            Some(self.stack[self.cur_top])
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AlignedVecU8 {
-    vec: Vec<u8>,
-}
-
-impl AlignedVecU8 {
-    pub fn new(buf_size: usize, page_size: usize) -> Self {
-        let vec = aligned_alloc(buf_size, page_size);
-        Self { vec }
-    }
-}
-
-impl Deref for AlignedVecU8 {
-    type Target = Vec<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.vec
-    }
-}
-
-impl DerefMut for AlignedVecU8 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.vec
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Buffer {
-    vec: AlignedVecU8,
-    cap: usize,
-    size: usize,
-}
-
-impl Buffer {
-    pub fn new(buf_size: usize, page_size: usize) -> Self {
-        let vec = AlignedVecU8::new(buf_size, page_size);
-        Self {
-            vec,
-            cap: buf_size,
-            size: 0,
-        }
-    }
-
-    pub fn push(&mut self, data: &[u8]) -> usize {
-        let push_len = data.len().min(self.cap - self.size);
-        self.vec.vec[self.size..self.size + push_len].copy_from_slice(&data[..push_len]);
-        // self. (&data[..push_len]);
-        self.size += push_len;
-        data.len() - push_len
-    }
-
-    pub fn is_full(&self) -> bool {
-        assert!(self.size <= self.cap);
-        self.size == self.cap
-    }
-
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.vec.vec.as_mut_ptr()
-    }
-
-    pub fn size(&self) -> u32 {
-        self.size as u32
-    }
-    pub fn cap(&self) -> u32 {
-        self.cap as u32
-    }
-
-    pub fn clear(&mut self) {
-        self.size = 0;
-    }
-
-    pub fn get_slice(&self, start: usize, end: usize) -> &[u8] {
-        &self.vec.vec[start..end]
-    }
-}
 
 pub fn write_rff_meta(
     file: &mut fs::File,
@@ -193,11 +79,12 @@ impl RffWriter {
         if page_size == 0 {
             panic!("Failed to get page size");
         }
+        let meta_preserve_size = 4 * 1024; // 4KB for metadata
 
-        write_rff_meta(&mut file, RFF_VERSION, 0, page_size).unwrap();
+        file.write_all(&RffHeaderV2::new(0).to_bytes(meta_preserve_size))
+            .expect("write header error");
 
         let buf_size = 4 * 1024 * 1024; // 4MB buffer size
-        let meta_preserve_size = 4 * 1024; // 4KB for metadata
 
         let ring = IoUring::new(io_depth as u32).unwrap();
 
@@ -351,8 +238,14 @@ impl Drop for RffWriter {
             self.recycle_buffer();
         }
         let num_records = self.write_cnt;
-        let page_size = self.page_size;
-        write_rff_meta(&mut self.file, RFF_VERSION, num_records, page_size).unwrap();
+
+        self.file
+            .seek(std::io::SeekFrom::Start(0))
+            .expect("seek error");
+        self.file
+            .write_all(&RffHeaderV2::new(num_records).to_bytes(4096))
+            .expect("write header error");
+
         self.file.sync_all().expect("Failed to sync file");
     }
 }
@@ -404,7 +297,7 @@ pub struct RffReader {
     file_size: u64,
     #[allow(unused)]
     read_position: u64,
-
+    header: RffHeaderV2,
     io_depth: usize,
     buff_size: usize,
     ring: IoUring,
@@ -421,23 +314,27 @@ impl RffReader {
     where
         P: AsRef<Path>,
     {
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECT)
             .open(p.as_ref())
             .unwrap();
         let file_size = file.metadata().unwrap().len();
 
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        let page_size = get_page_size();
         if page_size == 0 {
             panic!("Failed to get page size");
         }
+        let read_position = (4 * 1024) as u64; // skip the metadata area
+
+        let mut header_bytes = vec![0_u8; read_position as usize];
+        file.read_exact(&mut header_bytes).expect("read file error");
+        let header: RffHeaderV2 = (header_bytes.as_slice()).into();
 
         let io_depth = io_depth.get();
         let ring = IoUring::new(io_depth as u32).unwrap();
 
         let buff_size = 4 * 1024 * 1024; // 4MB buffer size
-        let read_position = 4 * 1024; // skip the metadata area
         let buffers_flag = vec![BufferStatus::default(); io_depth];
         let buffers = (0..io_depth)
             .map(|_| RefCell::new(Buffer::new(buff_size, page_size)))
@@ -446,6 +343,7 @@ impl RffReader {
             file,
             file_size,
             read_position,
+            header,
             io_depth,
             buff_size,
             ring,
@@ -458,6 +356,10 @@ impl RffReader {
             pending_io: 0,
             init_flag: false,
         }
+    }
+
+    pub fn num_records(&self) -> usize {
+        self.header.num_records()
     }
 
     pub fn read_serialized_data(&mut self) -> Option<Vec<u8>> {
