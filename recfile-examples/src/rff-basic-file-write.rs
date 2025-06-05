@@ -393,7 +393,13 @@ fn file_write_uring2(cli: &Cli) {
 fn file_write_uring3(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
     let mut data = aligned_alloc(data_size);
-    data.iter_mut().for_each(|v| *v = 'A' as u8);
+    data.iter_mut().enumerate().for_each(|(idx, v)| {
+        if (idx + 1) % 2 == 1 {
+            *v = 'A' as u8;
+        } else {
+            *v = '\n' as u8;
+        }
+    });
 
     // Open a file in write mode, creating it if it doesn't exist
     let file = OpenOptions::new()
@@ -459,6 +465,7 @@ fn file_write_uring3(cli: &Cli) {
         } else {
             ring.submit_and_wait(1).unwrap();
             let cqe = ring.completion().next().expect("No completion event");
+            
             valid_idx_queue.push(cqe.user_data() as usize);
         }
     }
