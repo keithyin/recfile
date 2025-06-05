@@ -271,7 +271,6 @@ fn file_write_uring1(cli: &Cli) {
             remaining_io += 1;
             start = end;
             sqe_cnt += 1;
-            
         } else {
             ring.submit_and_wait(1).unwrap();
             let cqe = ring.completion().next().expect("No completion event");
@@ -391,6 +390,92 @@ fn file_write_uring2(cli: &Cli) {
     println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block ？？？
 }
 
+fn file_write_uring3(cli: &Cli) {
+    let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
+    let mut data = aligned_alloc(data_size);
+    data.iter_mut().for_each(|v| *v = 'A' as u8);
+
+    // Open a file in write mode, creating it if it doesn't exist
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
+        .open(&cli.out_path)
+        .expect("Unable to create file");
+    let io_depth = 8;
+
+    let mut start = 0;
+    let buf_size = 4 * 1024 * 1024; // 1 MB buffer size
+    let instant = Instant::now();
+    let real_buffer = (0..io_depth)
+        .into_iter()
+        .map(|_| RefCell::new(AlignedBuffer::new(buf_size)))
+        .collect::<Vec<_>>();
+
+    let mut valid_idx_queue = FixedSizeStack::new(8);
+    valid_idx_queue.fill_stack(&vec![7, 6, 5, 4, 3, 2, 1, 0]);
+
+    let rio_buffers = real_buffer
+        .iter()
+        .map(|buf| libc::iovec {
+            iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
+            iov_len: buf_size,
+        })
+        .collect::<Vec<_>>();
+
+    let mut ring = IoUring::new(io_depth as u32).expect("Failed to create IoUring");
+    
+    unsafe {
+        ring.submitter()
+            .register_buffers(rio_buffers.as_slice())
+            .unwrap();
+        ring.submitter().register_files(&[file.as_raw_fd()]).unwrap();
+    }
+
+    // init completions
+    while start < data.len() {
+        // Write data to the file
+        let end = std::cmp::min(start + buf_size, data.len());
+        if let Some(valid_idx) = valid_idx_queue.pop() {
+            let mut buffer = real_buffer[valid_idx].borrow_mut();
+            buffer.clear_buf().fill_buffer(&data[start..end]);
+            let write_event = opcode::WriteFixed::new(
+                types::Fixed(file.as_raw_fd() as u32),
+                buffer.as_mut_ptr(),
+                buf_size as u32,
+                valid_idx as u16,
+            )
+            .offset(start as u64)
+            .build()
+            .user_data(valid_idx as u64);
+
+            unsafe {
+                ring.submission()
+                    .push(&write_event)
+                    .expect("Failed to push write event");
+            }
+            start = end;
+        } else {
+            ring.submit_and_wait(1).unwrap();
+            let cqe = ring.completion().next().expect("No completion event");
+            valid_idx_queue.push(cqe.user_data() as usize);
+        }
+    }
+    ring.submit_and_wait(io_depth).unwrap();
+    while let Some(cqe) = ring.completion().next() {
+        let valid_idx = cqe.user_data() as usize;
+        real_buffer[valid_idx].borrow_mut().data_size = 0; // Clear the buffer after use
+    }
+    file.sync_all().expect("Failed to sync file");
+    drop(file);
+
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = data_size as f64 / elapsed;
+    let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
+    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block ？？？
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.mode.as_str() {
@@ -398,6 +483,7 @@ fn main() {
         "dio" => file_write_dio(&cli),
         "uring1" => file_write_uring1(&cli),
         "uring2" => file_write_uring2(&cli),
+        "uring3" => file_write_uring3(&cli),
         _ => panic!("Unknown mode: {}", cli.mode),
     }
 }
