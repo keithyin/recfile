@@ -528,6 +528,7 @@ mod test {
         drop(writer);
 
         let mut reader = super::RffReader::new_reader(named_file.path(), NonZero::new(2).unwrap());
+        assert_eq!(reader.num_records(), num_records);
         let mut cnt = 0;
         while let Some(record) = reader.read_serialized_data() {
             assert_eq!(record, data);
