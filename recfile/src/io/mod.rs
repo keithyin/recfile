@@ -20,3 +20,7 @@ pub fn aligned_alloc(size: usize, page_size: usize) -> Vec<u8> {
         Vec::from_raw_parts(ptr, size, size)
     }
 }
+
+pub fn get_page_size() -> usize {
+    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+}

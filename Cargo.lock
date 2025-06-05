@@ -1412,18 +1412,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "recfile"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eca85a66325b82822510c8a9d73eb34eb9d06645ba507d3753411e0ff15f7a5c"
-dependencies = [
- "bincode",
- "crossbeam",
- "io-uring",
- "libc",
-]
-
-[[package]]
 name = "recfile-examples"
 version = "0.1.0"
 dependencies = [
@@ -1435,7 +1423,7 @@ dependencies = [
  "gskits",
  "io-uring",
  "libc",
- "recfile 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "recfile",
  "rust-htslib",
 ]
 

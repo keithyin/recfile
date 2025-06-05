@@ -48,6 +48,7 @@ fn vanilla_file_write(cli: &Cli) {
             .expect("Unable to write data");
         start = end;
     }
+    file.sync_all().unwrap();
     let elapsed = instant.elapsed().as_secs_f64();
     let bytes_per_sec = data_size as f64 / elapsed;
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
@@ -104,6 +105,7 @@ fn file_write_dio(cli: &Cli) {
             .expect("Unable to write data");
         start = end;
     }
+    file.sync_all().unwrap();
     let elapsed = instant.elapsed().as_secs_f64();
     let bytes_per_sec = data_size as f64 / elapsed;
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);

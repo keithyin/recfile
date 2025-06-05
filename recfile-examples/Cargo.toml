@@ -35,7 +35,7 @@ libc = "0.2"
 bincode={version="2", features = ["derive", "alloc"]}
 
 bytes = "1"
-recfile = "0.1.7"
+recfile = {path = "../recfile"}
 gass = {path = "../gass"}
 
 

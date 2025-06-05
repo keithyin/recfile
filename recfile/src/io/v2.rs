@@ -8,7 +8,9 @@ use std::{
     path::Path,
 };
 
-use io_uring::{IoUring, opcode, types};
+use io_uring::{IoUring, Submitter, opcode, types};
+
+use crate::io::get_page_size;
 
 use super::aligned_alloc;
 
@@ -187,7 +189,7 @@ impl RffWriter {
             .open(p.as_ref())
             .unwrap();
         let io_depth = io_depth.get();
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        let page_size = get_page_size();
         if page_size == 0 {
             panic!("Failed to get page size");
         }
@@ -199,15 +201,17 @@ impl RffWriter {
 
         let ring = IoUring::new(io_depth as u32).unwrap();
 
+        let buffers = (0..io_depth)
+            .map(|_| RefCell::new(Buffer::new(buf_size, page_size)))
+            .collect::<Vec<_>>();
+
         Self {
             file,
             meta_preserve_size,
             io_depth,
             page_size,
             buf_size,
-            buffers: (0..io_depth)
-                .map(|_| RefCell::new(Buffer::new(buf_size, page_size)))
-                .collect(),
+            buffers: buffers,
             active_buffer_index: None,
             free_buffer_indices: FixedSizeStack::new(io_depth).fill_stack(),
             ring: ring,
@@ -245,12 +249,12 @@ impl RffWriter {
                     // buffer is full
                     // eprintln!("buffer is full, remaining: {}", remaining);
                     data_start = data_end - remaining;
-                    self.submmit_buffer();
+                    self.submit_buffer();
                     continue;
                 } else {
                     if self.buffers[active_index].borrow().is_full() {
                         // buffer is full, submit it
-                        self.submmit_buffer();
+                        self.submit_buffer();
                     }
                     break;
                 }
@@ -277,7 +281,7 @@ impl RffWriter {
         Ok(())
     }
 
-    fn submmit_buffer(&mut self) {
+    fn submit_buffer(&mut self) {
         let idx = self.active_buffer_index.unwrap();
         let mut buf = self.buffers[idx].borrow_mut();
         if buf.size() == 0 {
@@ -295,7 +299,7 @@ impl RffWriter {
 
         // println!("{:?}", buf.get_slice(0, 100));
 
-        let seq = opcode::Write::new(
+        let sqe = opcode::Write::new(
             types::Fd(self.file.as_raw_fd()),
             buf.as_mut_ptr(),
             buf.cap(), // it must be cap. the actual size may not aligned!!
@@ -304,10 +308,11 @@ impl RffWriter {
         .build()
         .user_data(idx as u64);
 
+
         unsafe {
             self.ring
                 .submission()
-                .push(&seq)
+                .push(&sqe)
                 .expect("Failed to push submission queue entry");
         }
 
@@ -339,7 +344,7 @@ impl Drop for RffWriter {
         // Ensure all pending IO operations are completed
         if self.active_buffer_index.is_some() {
             // println!("Flushing remaining data to disk");
-            self.submmit_buffer();
+            self.submit_buffer();
         }
 
         while self.pending_io > 0 {
