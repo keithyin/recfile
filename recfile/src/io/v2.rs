@@ -18,8 +18,6 @@ use crate::{
     },
 };
 
-const RFF_VERSION: u32 = 2;
-
 pub fn write_rff_meta(
     file: &mut fs::File,
     version: u32,
@@ -47,6 +45,7 @@ pub struct RffWriter {
 
     #[allow(unused)]
     io_depth: usize,
+    #[allow(unused)]
     page_size: usize,
 
     #[allow(unused)]
