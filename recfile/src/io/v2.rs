@@ -8,7 +8,7 @@ use std::{
     path::Path,
 };
 
-use io_uring::{IoUring, Submitter, opcode, types};
+use io_uring::{IoUring, opcode, types};
 
 use crate::io::get_page_size;
 
@@ -307,7 +307,6 @@ impl RffWriter {
         .offset(self.write_position)
         .build()
         .user_data(idx as u64);
-
 
         unsafe {
             self.ring
