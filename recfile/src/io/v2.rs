@@ -12,9 +12,7 @@ use io_uring::{IoUring, opcode, types};
 use crate::{
     io::header::RffHeaderV2,
     util::{
-        buffer::{AlignedVecU8, Buffer},
-        get_page_size,
-        stack::FixedSizeStack,
+        buffer::{AlignedVecU8, Buffer}, get_buffer_size, get_page_size, stack::FixedSizeStack
     },
 };
 
@@ -40,13 +38,9 @@ pub fn write_rff_meta(
 /// 4k 之后，用来存放实际内容，结构体的二进制都通过 二进制大小+真实二进制的方式来存储
 pub struct RffWriter {
     file: fs::File,
-    #[allow(unused)]
-    meta_preserve_size: usize,
 
     #[allow(unused)]
     io_depth: usize,
-    #[allow(unused)]
-    page_size: usize,
 
     #[allow(unused)]
     buf_size: usize,
@@ -78,12 +72,11 @@ impl RffWriter {
         if page_size == 0 {
             panic!("Failed to get page size");
         }
-        let meta_preserve_size = 4 * 1024; // 4KB for metadata
 
-        file.write_all(&RffHeaderV2::new(0).to_bytes(meta_preserve_size))
+        file.write_all(&RffHeaderV2::new(0).to_bytes(page_size))
             .expect("write header error");
 
-        let buf_size = 4 * 1024 * 1024; // 4MB buffer size
+        let buf_size = get_buffer_size(); // 4MB buffer size
 
         let ring = IoUring::new(io_depth as u32).unwrap();
 
@@ -93,16 +86,14 @@ impl RffWriter {
 
         Self {
             file,
-            meta_preserve_size,
             io_depth,
-            page_size,
             buf_size,
             buffers: buffers,
             active_buffer_index: None,
             free_buffer_indices: FixedSizeStack::new(io_depth).fill_stack(),
             ring: ring,
             pending_io: 0,
-            write_position: meta_preserve_size as u64,
+            write_position: page_size as u64,
             write_cnt: 0,
         }
     }
@@ -294,8 +285,6 @@ impl Default for BufferStatus {
 pub struct RffReader {
     file: fs::File,
     file_size: u64,
-    #[allow(unused)]
-    read_position: u64,
     header: RffHeaderV2,
     io_depth: usize,
     buff_size: usize,
@@ -324,9 +313,9 @@ impl RffReader {
         if page_size == 0 {
             panic!("Failed to get page size");
         }
-        let read_position = (4 * 1024) as u64; // skip the metadata area
+        let read_position = page_size as u64; // skip the metadata area
 
-        let mut header_bytes = AlignedVecU8::new(4 * 1024, page_size);
+        let mut header_bytes = AlignedVecU8::new(page_size, page_size);
         file.seek(std::io::SeekFrom::Start(0)).expect("seek error");
         file.read_exact(&mut header_bytes).expect("read file error");
         let header: RffHeaderV2 = (header_bytes.as_slice()).into();
@@ -334,7 +323,7 @@ impl RffReader {
         let io_depth = io_depth.get();
         let ring = IoUring::new(io_depth as u32).unwrap();
 
-        let buff_size = 4 * 1024 * 1024; // 4MB buffer size
+        let buff_size = get_buffer_size(); // 4MB buffer size
         let buffers_flag = vec![BufferStatus::default(); io_depth];
         let buffers = (0..io_depth)
             .map(|_| RefCell::new(Buffer::new(buff_size, page_size)))
@@ -342,7 +331,6 @@ impl RffReader {
         Self {
             file,
             file_size,
-            read_position,
             header,
             io_depth,
             buff_size,
