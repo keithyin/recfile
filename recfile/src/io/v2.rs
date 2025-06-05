@@ -326,7 +326,8 @@ impl RffReader {
         }
         let read_position = (4 * 1024) as u64; // skip the metadata area
 
-        let mut header_bytes = vec![0_u8; read_position as usize];
+        let mut header_bytes = AlignedVecU8::new(4 * 1024, page_size);
+        file.seek(std::io::SeekFrom::Start(0)).expect("seek error");
         file.read_exact(&mut header_bytes).expect("read file error");
         let header: RffHeaderV2 = (header_bytes.as_slice()).into();
 
