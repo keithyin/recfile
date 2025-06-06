@@ -12,7 +12,9 @@ use io_uring::{IoUring, opcode, types};
 use crate::{
     io::header::RffHeaderV2,
     util::{
-        buffer::{AlignedVecU8, Buffer}, get_buffer_size, get_page_size, stack::FixedSizeStack
+        buffer::{AlignedVecU8, Buffer},
+        get_buffer_size, get_page_size,
+        stack::FixedSizeStack,
     },
 };
 
@@ -83,6 +85,26 @@ impl RffWriter {
         let buffers = (0..io_depth)
             .map(|_| RefCell::new(Buffer::new(buf_size, page_size)))
             .collect::<Vec<_>>();
+
+        let iovecs = buffers
+            .iter()
+            .map(|buf| {
+                let buf_len = buf.borrow().cap();
+                libc::iovec {
+                    iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
+                    iov_len: buf_len as usize,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        unsafe {
+            ring.submitter()
+                .register_buffers(iovecs.as_slice())
+                .expect("register buffers error");
+            ring.submitter()
+                .register_files(&[file.as_raw_fd()])
+                .expect("register file error");
+        }
 
         Self {
             file,
@@ -176,10 +198,21 @@ impl RffWriter {
 
         // println!("{:?}", buf.get_slice(0, 100));
 
-        let sqe = opcode::Write::new(
-            types::Fd(self.file.as_raw_fd()),
+        // let sqe = opcode::Write::new(
+        //     types::Fd(self.file.as_raw_fd()),
+        //     buf.as_mut_ptr(),
+        //     buf.cap(), // it must be cap. the actual size may not aligned!!
+        // )
+        // .offset(self.write_position)
+        // .build()
+        // .user_data(idx as u64);
+
+        // let buf_len = buf.cap();
+        let sqe = opcode::WriteFixed::new(
+            types::Fixed(0),
             buf.as_mut_ptr(),
             buf.cap(), // it must be cap. the actual size may not aligned!!
+            idx as u16,
         )
         .offset(self.write_position)
         .build()
@@ -283,7 +316,8 @@ impl Default for BufferStatus {
 }
 
 pub struct RffReader {
-    file: fs::File,
+    #[allow(unused)]
+    file: fs::File, // 不能删掉。要保证文件是打开的！
     file_size: u64,
     header: RffHeaderV2,
     io_depth: usize,
@@ -325,9 +359,30 @@ impl RffReader {
 
         let buff_size = get_buffer_size(); // 4MB buffer size
         let buffers_flag = vec![BufferStatus::default(); io_depth];
-        let buffers = (0..io_depth)
+        let buffers: Vec<RefCell<Buffer>> = (0..io_depth)
             .map(|_| RefCell::new(Buffer::new(buff_size, page_size)))
             .collect();
+
+        let iovecs = buffers
+            .iter()
+            .map(|buf| {
+                let buf_len = buf.borrow().cap();
+                libc::iovec {
+                    iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
+                    iov_len: buf_len as usize,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        unsafe {
+            ring.submitter()
+                .register_buffers(iovecs.as_slice())
+                .expect("register buffers error");
+            ring.submitter()
+                .register_files(&[file.as_raw_fd()])
+                .expect("register file error");
+        }
+
         Self {
             file,
             file_size,
@@ -467,10 +522,20 @@ impl RffReader {
         }
         assert!(self.buffers_flag[buf_idx].ready4sqe());
 
-        let sqe = opcode::Read::new(
-            types::Fd(self.file.as_raw_fd()),
+        // let sqe = opcode::Read::new(
+        //     types::Fd(self.file.as_raw_fd()),
+        //     self.buffers[buf_idx].borrow_mut().as_mut_ptr(),
+        //     self.buff_size as u32,
+        // )
+        // .offset(self.file_offset_of_buffers[buf_idx])
+        // .build()
+        // .user_data(buf_idx as u64);
+        let buf_cap = self.buffers[buf_idx].borrow().cap();
+        let sqe = opcode::ReadFixed::new(
+            types::Fixed(0),
             self.buffers[buf_idx].borrow_mut().as_mut_ptr(),
-            self.buff_size as u32,
+            buf_cap,
+            buf_idx as u16,
         )
         .offset(self.file_offset_of_buffers[buf_idx])
         .build()

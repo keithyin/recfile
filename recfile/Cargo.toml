@@ -1,6 +1,6 @@
 [package]
 name = "recfile"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "A library for sequentially reading and writing serialized structured records."
 license = "MIT"
