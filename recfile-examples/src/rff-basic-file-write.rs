@@ -407,7 +407,7 @@ fn file_write_uring3(cli: &Cli) {
         .write(true)
         .create(true)
         .truncate(true)
-        .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
+        // .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
         .open(&cli.out_path)
         .expect("Unable to create file");
     let io_depth = 8;
@@ -471,7 +471,7 @@ fn file_write_uring3(cli: &Cli) {
             ring.submit_and_wait(1).unwrap();
             let cqe = ring.completion().next().expect("No completion event");
             if cqe.result() < 0 {
-                panic!("cqe error: {}", cqe.result());
+                panic!("cqe result : {}", cqe.result());
             }
             valid_idx_queue.push(cqe.user_data() as usize);
         }
