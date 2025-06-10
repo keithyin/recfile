@@ -407,13 +407,13 @@ fn file_write_uring3(cli: &Cli) {
         .write(true)
         .create(true)
         .truncate(true)
-        // .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
+        .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
         .open(&cli.out_path)
         .expect("Unable to create file");
     let io_depth = 8;
 
     let mut start = 0;
-    let buf_size = 4 * 1024 * 1024; // 1 MB buffer size
+    let buf_size = 1 * 1024 * 1024; // 1 MB buffer size
     let instant = Instant::now();
     let real_buffer = (0..io_depth)
         .into_iter()
