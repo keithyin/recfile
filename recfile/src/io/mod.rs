@@ -3,6 +3,7 @@ use bincode::config::Configuration;
 pub mod v1;
 pub mod v2;
 pub mod header;
+pub mod indexed_rw;
 
 pub fn get_bincode_cfg() -> Configuration {
     bincode::config::standard()
