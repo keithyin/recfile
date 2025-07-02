@@ -14,6 +14,10 @@ name = "bam-rff-cvt"
 path = "src/bam-rff-cvt.rs"
 
 [[bin]]
+name = "bam-indexed-rff-cvt"
+path = "src/bam-indexed-rff-cvt.rs"
+
+[[bin]]
 name = "rff-basic-file-write"
 path = "src/rff-basic-file-write.rs"
 
