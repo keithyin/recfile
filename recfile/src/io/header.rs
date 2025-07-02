@@ -46,3 +46,33 @@ impl From<&[u8]> for RffHeaderV2 {
         }
     }
 }
+
+const INDEXED_RFF_HEADER_V2_MAGIC_NUMBER: &'static str = "INDEXED_RFF_V001";
+
+pub struct IndexedRffReaderHeader {
+    magic_number: String,
+}
+impl IndexedRffReaderHeader {
+    pub fn new() -> Self {
+        Self {
+            magic_number: INDEXED_RFF_HEADER_V2_MAGIC_NUMBER.to_string(),
+        }
+    }
+
+    pub fn check_valid(&self) {
+        assert!(self.magic_number.eq(INDEXED_RFF_HEADER_V2_MAGIC_NUMBER));
+    }
+
+    pub fn to_bytes(&self, expected_len: usize) -> Vec<u8> {
+        let mut result = aligned_alloc(expected_len, get_page_size());
+        result[0..16].copy_from_slice(self.magic_number.as_bytes());
+        result
+    }
+}
+
+impl From<&[u8]> for IndexedRffReaderHeader {
+    fn from(value: &[u8]) -> Self {
+        let magic_number = String::from_utf8(value[..16].to_vec()).unwrap();
+        Self { magic_number }
+    }
+}

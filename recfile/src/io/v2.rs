@@ -35,9 +35,9 @@ pub fn write_rff_meta(
     Ok(())
 }
 
-/// 存储序列化的对象，核心实现是二级存储
 /// 开头留 4k 的空间用来存放 元数据（magic number， 以及一些其它信息）。
 /// 4k 之后，用来存放实际内容，结构体的二进制都通过 二进制大小+真实二进制的方式来存储
+/// Rff. Record file format
 pub struct RffWriter {
     file: fs::File,
 
@@ -565,6 +565,7 @@ impl RffReader {
 mod test {
     use std::num::NonZero;
 
+    use gskits::pbar::{DEFAULT_INTERVAL, get_bar_pb};
     // use gskits::pbar::{DEFAULT_INTERVAL, get_bar_pb};
     use tempfile::NamedTempFile;
 
@@ -594,27 +595,29 @@ mod test {
         );
     }
 
-    // #[test]
-    // fn test_rff_read() {
-    //     let named_file = "data.rff";
-    //     let mut reader = super::RffReader::new_reader(named_file, NonZero::new(2).unwrap());
-    //     while let Some(record) = reader.read_serialized_data() {
-    //         println!("{}", String::from_utf8_lossy(&record));
-    //     }
-    // }
+    #[test]
+    #[ignore = "no file"]
+    fn test_rff_read() {
+        let named_file = "data.rff";
+        let mut reader = super::RffReader::new_reader(named_file, NonZero::new(2).unwrap());
+        while let Some(record) = reader.read_serialized_data() {
+            println!("{}", String::from_utf8_lossy(&record));
+        }
+    }
 
-    // #[test]
-    // fn test_rff_write() {
-    //     let named_file = "data.rff";
-    //     let mut writer = super::RffWriter::new_writer(named_file, NonZero::new(2).unwrap());
-    //     let data = b"Hel m\n";
-    //     let tot = 1000000;
-    //     let pb = get_bar_pb(format!("runing..."), DEFAULT_INTERVAL, tot);
-    //     for _idx in 0..tot {
-    //         pb.inc(1);
-    //         writer.write_serialized_data(data).unwrap();
-    //     }
-    //     pb.finish();
-    //     drop(writer);
-    // }
+    #[test]
+    #[ignore = "no file"]
+    fn test_rff_write() {
+        let named_file = "data.rff";
+        let mut writer = super::RffWriter::new_writer(named_file, NonZero::new(2).unwrap());
+        let data = b"Hel m\n";
+        let tot = 1000000;
+        let pb = get_bar_pb(format!("runing..."), DEFAULT_INTERVAL, tot);
+        for _idx in 0..tot {
+            pb.inc(1);
+            writer.write_serialized_data(data).unwrap();
+        }
+        pb.finish();
+        drop(writer);
+    }
 }
