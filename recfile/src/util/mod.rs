@@ -18,6 +18,7 @@ pub const fn get_page_size() -> usize {
     4096
 }
 
+/// 4MB buffer size
 pub fn get_buffer_size() -> usize {
     4 * 1024 * 1024
 }

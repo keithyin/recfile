@@ -10,7 +10,7 @@ use std::{
 use io_uring::{IoUring, opcode, types};
 
 use crate::{
-    io::header::RffHeaderV2,
+    io::{header::RffHeaderV2, BufferStatus, DataLocation},
     util::{
         buffer::{AlignedVecU8, Buffer},
         get_buffer_size, get_page_size,
@@ -273,47 +273,7 @@ impl Drop for RffWriter {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DataLocation {
-    buf_idx: usize,
-    offset: usize,
-}
 
-#[derive(Debug, Clone, Copy)]
-pub enum BufferStatus {
-    ReadyForRead,
-    ReadyForSqe, // 可以用于提交 io_uring 读请求
-    Invalid,
-}
-impl BufferStatus {
-    pub fn ready4read(&self) -> bool {
-        matches!(self, BufferStatus::ReadyForRead)
-    }
-
-    pub fn ready4sqe(&self) -> bool {
-        matches!(self, BufferStatus::ReadyForSqe)
-    }
-
-    pub fn is_invalid(&self) -> bool {
-        matches!(self, BufferStatus::Invalid)
-    }
-
-    pub fn set_ready4read(&mut self) {
-        *self = BufferStatus::ReadyForRead;
-    }
-    pub fn set_ready4sqe(&mut self) {
-        *self = BufferStatus::ReadyForSqe;
-    }
-
-    pub fn set_invalid(&mut self) {
-        *self = BufferStatus::Invalid;
-    }
-}
-impl Default for BufferStatus {
-    fn default() -> Self {
-        BufferStatus::ReadyForSqe
-    }
-}
 
 pub struct RffReader {
     #[allow(unused)]
