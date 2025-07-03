@@ -1,12 +1,16 @@
 use anyhow;
 use memmap2::{self, Mmap};
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Read, Seek, Write},
     num::NonZero,
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{FileExt, OpenOptionsExt},
+    },
     path::Path,
 };
 
@@ -190,26 +194,12 @@ impl IndexedRffWriter {
             self.active_buffer_index = None;
             return;
         }
-        // println!("before:{:?}", buf.get_slice(0, 100));
+
         if buf.size() < buf.cap() {
-            // if the buffer is not full, we need to pad it with zeros
             let padding_size = buf.cap() - buf.size();
-            // println!("Padding size: {}", padding_size);
             buf.push(vec![0; padding_size as usize].as_slice());
         }
 
-        // println!("{:?}", buf.get_slice(0, 100));
-
-        // let sqe = opcode::Write::new(
-        //     types::Fd(self.file.as_raw_fd()),
-        //     buf.as_mut_ptr(),
-        //     buf.cap(), // it must be cap. the actual size may not aligned!!
-        // )
-        // .offset(self.write_position)
-        // .build()
-        // .user_data(idx as u64);
-
-        // let buf_len = buf.cap();
         let sqe = opcode::WriteFixed::new(
             types::Fixed(0),
             buf.as_mut_ptr(),
@@ -310,11 +300,10 @@ impl IndexedRffReader {
     where
         P: AsRef<Path>,
     {
-        let mut file = File::open(p.as_ref()).unwrap();
-
+        let file = File::open(p.as_ref()).unwrap();
         let mut header_bytes = vec![0_u8; get_page_size()];
-        file.seek(std::io::SeekFrom::Start(0)).expect("seek error");
-        file.read_exact(&mut header_bytes).expect("read file error");
+        file.read_exact_at(&mut header_bytes, 0)
+            .expect("read meta error");
         let header: IndexedRffReaderHeader = (header_bytes.as_slice()).into();
         header.check_valid();
 
@@ -327,16 +316,25 @@ impl IndexedRffReader {
         Self { file, mmap_file }
     }
 
-    pub fn read_serialized_data(&mut self, data_meta: &DataMeta) -> anyhow::Result<Vec<u8>> {
-        let mut buf = vec![0; data_meta.size];
-        if let Some(mmap_file) = &self.mmap_file {
-            buf.copy_from_slice(&mmap_file[data_meta.offset..(data_meta.offset + data_meta.size)]);
+    pub fn read_serialized_data(&self, data_meta: &DataMeta) -> anyhow::Result<Cow<[u8]>> {
+        return if let Some(mmap_file) = &self.mmap_file {
+            Ok(Cow::Borrowed(
+                &mmap_file[data_meta.offset..(data_meta.offset + data_meta.size)],
+            ))
+
+            // buf.copy_from_slice(&mmap_file[data_meta.offset..(data_meta.offset + data_meta.size)]);
         } else {
-            self.file
-                .seek(std::io::SeekFrom::Start(data_meta.offset as u64))?;
-            self.file.read_exact(&mut buf)?;
-        }
-        Ok(buf)
+            // self.file
+            //     .seek(std::io::SeekFrom::Start(data_meta.offset as u64))?;
+            // self.file.read_exact(&mut buf)?;
+
+            // 采用 read_exact_at 而不是 seek + read_exact 方案是为了 解决多线程场景问题。
+            // read_exact_at 底层是 pread. 无需修改线程偏移量，是线程安全的
+            let mut buf = vec![0; data_meta.size];
+            self.file.read_exact_at(&mut buf, data_meta.offset as u64)?;
+
+            Ok(Cow::Owned(buf))
+        };
     }
 
     pub fn read_data_index(filepath: &str) -> HashMap<String, DataMeta> {
@@ -376,7 +374,7 @@ mod test {
         let mut cnt = 0;
         data_index.iter().for_each(|(_key, data_meta)| {
             let record = reader.read_serialized_data(data_meta).unwrap();
-            assert_eq!(record, data);
+            assert_eq!(record, data.as_ref());
             cnt += 1;
         });
 
@@ -412,11 +410,11 @@ mod test {
         let named_file = "data.rff";
 
         let data_index = super::IndexedRffReader::read_data_index(named_file);
-        let mut reader = super::IndexedRffReader::new_reader(named_file, true);
+        let reader = super::IndexedRffReader::new_reader(named_file, true);
         let mut cnt = 0;
         data_index.iter().for_each(|(_key, data_meta)| {
             let record = reader.read_serialized_data(data_meta).unwrap();
-            println!("{}", String::from_utf8(record).unwrap());
+            println!("{}", String::from_utf8(record.into_owned()).unwrap());
             cnt += 1;
         });
     }

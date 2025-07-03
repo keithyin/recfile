@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashSet,
     num::NonZero,
     ops::{Deref, DerefMut},
@@ -649,10 +650,10 @@ fn idxrff2bam(cli: &Cli) {
             let in_path = cli.in_path.clone();
             move || {
                 let data_idx = IndexedRffReader::read_data_index(&in_path);
-                let mut reader = IndexedRffReader::new_reader(in_path, true);
+                let reader = IndexedRffReader::new_reader(in_path, true);
                 data_idx.iter().for_each(|(_name, meta)| {
                     read_sender
-                        .send(reader.read_serialized_data(meta).unwrap())
+                        .send(reader.read_serialized_data(meta).unwrap().into_owned())
                         .unwrap();
                 });
             }
@@ -781,7 +782,7 @@ fn indexed_rff_read(cli: &Cli) -> Vec<Vec<u8>> {
 
     let data_idx = IndexedRffReader::read_data_index(&in_path);
 
-    let mut reader = IndexedRffReader::new_reader(in_path, false);
+    let reader = IndexedRffReader::new_reader(in_path, false);
     let mut bytes = 0;
     let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
 
@@ -789,7 +790,7 @@ fn indexed_rff_read(cli: &Cli) -> Vec<Vec<u8>> {
     let mut all_data: Vec<Vec<u8>> = vec![];
     // let mut all_data = vec![];
     data_idx.iter().for_each(|(_, meta)| {
-        let data = reader.read_serialized_data(meta).unwrap();
+        let data = reader.read_serialized_data(meta).unwrap().into_owned();
         bytes += data.len();
         all_data.push(data);
         pb.inc(1);
@@ -809,7 +810,7 @@ fn indexed_rff_read_mmap(cli: &Cli) -> Vec<Vec<u8>> {
 
     let data_idx = IndexedRffReader::read_data_index(&in_path);
 
-    let mut reader = IndexedRffReader::new_reader(in_path, true);
+    let reader = IndexedRffReader::new_reader(in_path, true);
     let mut bytes = 0;
     let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
 
@@ -817,7 +818,7 @@ fn indexed_rff_read_mmap(cli: &Cli) -> Vec<Vec<u8>> {
     let mut all_data: Vec<Vec<u8>> = vec![];
     // let mut all_data = vec![];
     data_idx.iter().for_each(|(_, meta)| {
-        let data = reader.read_serialized_data(meta).unwrap();
+        let data = reader.read_serialized_data(meta).unwrap().into_owned();
         bytes += data.len();
         all_data.push(data);
         pb.inc(1);
