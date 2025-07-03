@@ -5,7 +5,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, BufWriter, Read, Seek, Write},
+    io::{BufRead, BufReader, BufWriter, Seek, Write},
     num::NonZero,
     os::{
         fd::AsRawFd,
@@ -503,46 +503,40 @@ impl IndexedRffSequentialReader {
     }
 
     pub fn read_serialized_data(&mut self) -> Option<(Arc<String>, Vec<u8>)> {
-        let record_len = self.read_record_length();
-        if record_len == 0 {
-            return None; // No more records to read
-        }
-        let name = self
-            .sequential_meta
-            .metas
-            .get(self.cur_data_idx)
-            .unwrap()
-            .0
-            .clone();
-        let mut data = vec![0_u8; record_len];
-        if let Some(()) = self.read_exact(&mut data) {
-            Some((name, data))
+        if let Some((name, record_len)) = self.read_record_meta() {
+            let mut data = vec![0_u8; record_len];
+            if let Some(()) = self.read_exact(&mut data) {
+                Some((name, data))
+            } else {
+                None
+            }
         } else {
             None
         }
     }
 
-    pub fn read_serialized_data_to_buf(&mut self, buf: &mut [u8]) -> Option<usize> {
-        let record_len = self.read_record_length();
-        if record_len == 0 {
-            return None; // No more records to read
-        }
-        assert!(buf.len() >= record_len, "buf too short");
-        if let Some(()) = self.read_exact(&mut buf[..record_len]) {
-            Some(record_len)
+    pub fn read_serialized_data_to_buf(&mut self, buf: &mut [u8]) -> Option<(Arc<String>, usize)> {
+        if let Some((name, record_len)) = self.read_record_meta() {
+            assert!(buf.len() >= record_len, "buf too short");
+            if let Some(()) = self.read_exact(&mut buf[..record_len]) {
+                Some((name, record_len))
+            } else {
+                None
+            }
         } else {
             None
         }
     }
 
-    fn read_record_length(&mut self) -> usize {
+    fn read_record_meta(&mut self) -> Option<(Arc<String>, usize)> {
         let cur_data_idx = self.cur_data_idx;
         if cur_data_idx > self.sequential_meta.metas.len() - 1 {
-            return 0; // No more records to read
+            return None; // No more records to read
         }
         let length = self.sequential_meta.metas[cur_data_idx].1.size;
+        let name = self.sequential_meta.metas[cur_data_idx].0.clone();
         self.cur_data_idx += 1; // Move to the next record
-        length
+        Some((name, length))
     }
 
     fn read_exact(&mut self, data: &mut [u8]) -> Option<()> {
@@ -737,5 +731,35 @@ mod test {
             println!("{}", String::from_utf8(record.into_owned()).unwrap());
             cnt += 1;
         });
+    }
+
+    #[test]
+    #[ignore = "no file"]
+    fn test_rff_sequential_read() {
+        let named_file = "data.rff";
+
+        let data_index = super::IndexedRffSequentialReader::read_data_index(named_file, 1000);
+        let mut cnt = 0;
+        data_index.into_iter().for_each(|chunk| {
+            let mut reader = super::IndexedRffSequentialReader::new_reader(
+                named_file,
+                chunk,
+                NonZero::new(2).unwrap(),
+            );
+
+            while let Some((name, record)) = reader.read_serialized_data() {
+                println!("{}: {}", name, String::from_utf8(record).unwrap());
+                cnt += 1;
+            }
+            println!("Chunk read {} records", cnt);
+        });
+    }
+
+    #[test]
+    fn test_vec_take() {
+        let mut v = vec!["a".to_string(), "b".to_string()];
+        let first = std::mem::replace(&mut v[0], "c".to_string());
+        println!("first: {}", first);
+        println!("{:?}", v);
     }
 }
