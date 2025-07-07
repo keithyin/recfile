@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 
-use io_uring::{cqueue, opcode, types, IoUring};
+use io_uring::{IoUring, cqueue, opcode, types};
 use recfile::util::{
     aligned_alloc,
     buffer::{AlignedVecU8, Buffer},
@@ -238,6 +238,7 @@ fn io_uring3(fname: &str, data: &[u8], chunk_size: usize) {
         .collect::<Vec<_>>();
     // let mut ring = IoUring::new(io_depth as u32).expect("Failed to create IoUring");
     let mut ring = IoUring::builder()
+        .setup_iopoll()
         .setup_sqpoll(1000)
         .build(io_depth as u32)
         .expect("Failed to create IoUring");
