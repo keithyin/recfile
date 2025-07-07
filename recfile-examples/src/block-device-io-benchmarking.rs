@@ -10,7 +10,7 @@ use std::{
 use io_uring::{IoUring, cqueue, opcode, types};
 use recfile::util::{
     aligned_alloc,
-    buffer::{AlignedVecU8, Buffer},
+    buffer::{self, AlignedVecU8, Buffer},
     get_page_size,
     stack::FixedSizeStack,
 };
@@ -49,10 +49,13 @@ fn direct_io(fname: &str, data: &[u8], chunk_size: usize) {
         .open(fname)
         .expect("Failed to open file for direct IO");
 
+    let mut buffer = Buffer::new(chunk_size, get_page_size());
+
     for idx in 0..(data.len() / chunk_size) {
         let start = idx * chunk_size;
         let end = start + chunk_size;
-        file.write_all(&data[start..end])
+        buffer.clear().push(&data[start..end]);
+        file.write_all(buffer.get_slice(0, end - start))
             .expect("Failed to write data");
     }
     file.sync_all().expect("Failed to sync file");
