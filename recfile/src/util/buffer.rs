@@ -69,8 +69,9 @@ impl Buffer {
         self.cap as u32
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self) -> &mut Self {
         self.size = 0;
+        self
     }
 
     pub fn get_slice(&self, start: usize, end: usize) -> &[u8] {

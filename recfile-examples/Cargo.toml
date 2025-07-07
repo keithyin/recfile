@@ -29,6 +29,11 @@ path = "src/rffv2-rw-speed.rs"
 name = "rffv2-simple-read"
 path = "src/rffv2-simple-read.rs"
 
+[[bin]]
+name = "block-device-io-benchmarking"
+path = "src/block-device-io-benchmarking.rs"
+
+
 [dependencies]
 clap={version="4", features=["derive"]}
 rust-htslib = "0.49"
