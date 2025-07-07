@@ -24,6 +24,7 @@ gskits = "0.15"
 criterion = "0.3"
 
 
+
 [[bench]]
-name = "index_rw"
+name = "block_device_io"
 harness = false
