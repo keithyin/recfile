@@ -359,7 +359,7 @@ fn benckmark(fname: &str) {
 }
 
 fn main() {
-    let fname = "test_io_benchmarking.dat";
+    let fname = "/data/io_benckmarking.data";
     benckmark(fname);
     remove_file(fname);
 }
