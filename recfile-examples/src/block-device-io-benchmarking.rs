@@ -8,12 +8,7 @@ use std::{
 };
 
 use io_uring::{IoUring, cqueue, opcode, types};
-use recfile::util::{
-    aligned_alloc,
-    buffer::{self, AlignedVecU8, Buffer},
-    get_page_size,
-    stack::FixedSizeStack,
-};
+use recfile::util::{aligned_alloc, buffer::Buffer, get_page_size, stack::FixedSizeStack};
 
 fn clear_cache() {
     process::Command::new("sh")
@@ -24,11 +19,12 @@ fn clear_cache() {
 
     process::Command::new("sh")
         .arg("-c")
-        .arg("echo 3 > /proc/sys/vm/drop_caches")
+        .arg("echo 3 | sudo /usr/bin/tee /proc/sys/vm/drop_caches")
         .status()
         .expect("Failed to clear cache");
 }
 
+/// buffered_io, mean:478.14MB/s, median:503.78MB/s, min:383.29MB/s, max:518.47MB/s
 fn buffered_io(fname: &str, data: &[u8], chunk_size: usize) {
     let mut file = fs::File::create(fname).expect("Failed to create file");
 
@@ -41,6 +37,7 @@ fn buffered_io(fname: &str, data: &[u8], chunk_size: usize) {
     file.sync_all().expect("Failed to sync file");
 }
 
+/// direct_io, mean:2787.89MB/s, median:2775.94MB/s, min:2615.54MB/s, max:2944.53MB/s
 fn direct_io(fname: &str, data: &[u8], chunk_size: usize) {
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -61,6 +58,7 @@ fn direct_io(fname: &str, data: &[u8], chunk_size: usize) {
     file.sync_all().expect("Failed to sync file");
 }
 
+/// io_uring, mean:2780.52MB/s, median:2799.49MB/s, min:2543.82MB/s, max:2938.40MB/s
 fn io_uring(fname: &str, data: &[u8], chunk_size: usize) {
     let file = fs::OpenOptions::new()
         .write(true)
@@ -130,6 +128,8 @@ fn io_uring(fname: &str, data: &[u8], chunk_size: usize) {
     drop(file);
 }
 
+
+/// io_uring2, mean:3324.58MB/s, median:3389.75MB/s, min:2936.42MB/s, max:3561.40MB/s
 fn io_uring2(fname: &str, data: &[u8], chunk_size: usize) {
     let file = fs::OpenOptions::new()
         .write(true)
@@ -214,6 +214,7 @@ fn io_uring2(fname: &str, data: &[u8], chunk_size: usize) {
     drop(file);
 }
 
+/// io_uring3, mean:4305.21MB/s, median:4460.61MB/s, min:3969.57MB/s, max:4576.11MB/s
 fn io_uring3(fname: &str, data: &[u8], chunk_size: usize) {
     let file = fs::OpenOptions::new()
         .write(true)
@@ -326,9 +327,10 @@ fn benchmarking_core(
     chunk_size: usize,
     op: fn(&str, &[u8], usize),
 ) {
-    let mut speeds = vec![0.0; 20];
+    let num_iter = 1;
+    let mut speeds = vec![0.0; num_iter];
 
-    for i in 0..20 {
+    for i in 0..num_iter {
         remove_file(fname);
         clear_cache();
         let instant = Instant::now();
@@ -341,21 +343,21 @@ fn benchmarking_core(
     }
 
     speeds.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    println!(
-        "{}, mean:{}MB/s, median:{}MB/s, min:{}MB/s, max:{}MB/s",
-        tag,
-        speeds.iter().sum::<f64>() / speeds.len() as f64,
-        (speeds[speeds.len() / 2] + speeds[speeds.len() / 2 - 1]) / 2.0,
-        speeds[0],
-        speeds[speeds.len() - 1]
-    );
+    // println!(
+    //     "{}, mean:{:.2}MB/s, median:{:.2}MB/s, min:{:.2}MB/s, max:{:.2}MB/s",
+    //     tag,
+    //     speeds.iter().sum::<f64>() / speeds.len() as f64,
+    //     (speeds[speeds.len() / 2] + speeds[speeds.len() / 2 - 1]) / 2.0,
+    //     speeds[0],
+    //     speeds[speeds.len() - 1]
+    // );
 }
 
 fn benckmark(fname: &str) {
     let data = prepare_data();
     let chunk_size = 1024 * 1024; // 1MB
 
-    // benchmarking_core("buffered_io", fname, &data, chunk_size, buffered_io);
+    benchmarking_core("buffered_io", fname, &data, chunk_size, buffered_io);
     benchmarking_core("direct_io", fname, &data, chunk_size, direct_io);
     benchmarking_core("io_uring", fname, &data, chunk_size, io_uring);
     benchmarking_core("io_uring2", fname, &data, chunk_size, io_uring2);
