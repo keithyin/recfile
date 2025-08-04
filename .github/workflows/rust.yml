@@ -21,6 +21,4 @@ jobs:
     - name: Run tests
       run: |
         ulimit -l
-        ulimit -l $((1024 * 1024))
-        ulimit -l
         cargo test --verbose
