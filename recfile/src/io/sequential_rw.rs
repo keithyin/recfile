@@ -10,10 +10,10 @@ use std::{
 use io_uring::{IoUring, opcode, types};
 
 use crate::{
-    io::{header::RffHeaderV2, BufferStatus, DataLocation},
+    io::{BufferStatus, DataLocation, header::RffHeader},
     util::{
         buffer::{AlignedVecU8, Buffer},
-        get_buffer_size, get_page_size,
+        get_page_size,
         stack::FixedSizeStack,
     },
 };
@@ -58,7 +58,8 @@ pub struct RffWriter {
 impl RffWriter {
     ///
     /// sender is used for to send data to be written. the data should be bytes stream
-    pub fn new_writer<P>(p: P, io_depth: NonZero<usize>) -> Self
+    /// buf_size: KB
+    pub fn new_writer<P>(p: P, io_depth: NonZero<usize>, buf_size: NonZero<usize>) -> Self
     where
         P: AsRef<Path>,
     {
@@ -74,11 +75,17 @@ impl RffWriter {
         if page_size == 0 {
             panic!("Failed to get page size");
         }
+        let buf_size = buf_size.get() * 1024; // KB to Bytes
 
-        file.write_all(&RffHeaderV2::new(0).to_bytes(page_size))
+        assert!(
+            buf_size % page_size == 0,
+            "buf_size must be aligned to page size, buf_size: {}, page_size: {}",
+            buf_size,
+            page_size
+        );
+
+        file.write_all(&RffHeader::new(0, buf_size).to_bytes(page_size))
             .expect("write header error");
-
-        let buf_size = get_buffer_size(); // 4MB buffer size
 
         let ring = IoUring::new(io_depth as u32).unwrap();
 
@@ -266,20 +273,18 @@ impl Drop for RffWriter {
             .seek(std::io::SeekFrom::Start(0))
             .expect("seek error");
         self.file
-            .write_all(&RffHeaderV2::new(num_records).to_bytes(4096))
+            .write_all(&RffHeader::new(num_records, self.buf_size).to_bytes(4096))
             .expect("write header error");
 
         self.file.sync_all().expect("Failed to sync file");
     }
 }
 
-
-
 pub struct RffReader {
     #[allow(unused)]
     file: fs::File, // 不能删掉。要保证文件是打开的！
     file_size: u64,
-    header: RffHeaderV2,
+    header: RffHeader,
     io_depth: usize,
     buff_size: usize,
     ring: IoUring,
@@ -312,12 +317,12 @@ impl RffReader {
         let mut header_bytes = AlignedVecU8::new(page_size, page_size);
         file.seek(std::io::SeekFrom::Start(0)).expect("seek error");
         file.read_exact(&mut header_bytes).expect("read file error");
-        let header: RffHeaderV2 = (header_bytes.as_slice()).into();
+        let header: RffHeader = (header_bytes.as_slice()).into();
 
         let io_depth = io_depth.get();
         let ring = IoUring::new(io_depth as u32).unwrap();
 
-        let buff_size = get_buffer_size(); // 4MB buffer size
+        let buff_size = header.buf_size();
         let buffers_flag = vec![BufferStatus::default(); io_depth];
         let buffers: Vec<RefCell<Buffer>> = (0..io_depth)
             .map(|_| RefCell::new(Buffer::new(buff_size, page_size)))
@@ -533,7 +538,11 @@ mod test {
     fn test_rff_rw() {
         let num_records = 1024 * 1024;
         let named_file = NamedTempFile::new().unwrap();
-        let mut writer = super::RffWriter::new_writer(named_file.path(), NonZero::new(2).unwrap());
+        let mut writer = super::RffWriter::new_writer(
+            named_file.path(),
+            NonZero::new(2).unwrap(),
+            NonZero::new(4).unwrap(),
+        );
         let data = b"Hello, world! today is a good day.\n";
 
         for _ in 0..num_records {
@@ -569,7 +578,11 @@ mod test {
     #[ignore = "no file"]
     fn test_rff_write() {
         let named_file = "data.rff";
-        let mut writer = super::RffWriter::new_writer(named_file, NonZero::new(2).unwrap());
+        let mut writer = super::RffWriter::new_writer(
+            named_file,
+            NonZero::new(2).unwrap(),
+            NonZero::new(4).unwrap(),
+        );
         let data = b"Hel m\n";
         let tot = 1000000;
         let pb = get_bar_pb(format!("runing..."), DEFAULT_INTERVAL, tot);

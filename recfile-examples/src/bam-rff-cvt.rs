@@ -16,8 +16,7 @@ use gskits::{
 };
 use recfile::io::{
     get_bincode_cfg,
-    v1::{RffReader, RffWriter},
-    v2,
+    sequential_rw,
 };
 use rust_htslib::bam::{self, Read, Record, record::Aux};
 #[derive(Parser, Debug)]
@@ -429,38 +428,6 @@ fn enc_worker_with_codec_lz4(
     }
 }
 
-fn b2g(cli: &Cli) {
-    let out_path = cli.get_out_path();
-    println!("{:?}", out_path);
-    std::thread::scope(|thread_scope| {
-        let (writer, sender4writer) =
-            RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap());
-        writer.start_write_worker();
-        let (bam_record_sender, bam_record_recv) = crossbeam::channel::bounded(1000);
-        thread_scope.spawn({
-            let bam_path = cli.in_path.clone();
-            let bam_threads = cli.in_threads;
-            let rep_times = cli.rep_times.clone();
-            move || {
-                bam_reader(&bam_path, bam_threads, bam_record_sender, rep_times);
-            }
-        });
-
-        for _ in 0..cli.codec_threads {
-            thread_scope.spawn({
-                let recv = bam_record_recv.clone();
-                let sender = sender4writer.clone();
-                let batch_size = cli.batch_size.clone();
-                move || {
-                    enc_worker(recv, sender, batch_size);
-                }
-            });
-        }
-        drop(sender4writer);
-        writer.wait_for_write_done();
-    });
-}
-
 fn decode_worker(sender: Sender<bam::Record>, recv: Receiver<Vec<u8>>) {
     let cfg = get_bincode_cfg();
     for data in recv {
@@ -574,25 +541,6 @@ where
     pb.finish();
 }
 
-fn g2b(cli: &Cli) {
-    let (reader, recv) = RffReader::new_reader(&cli.in_path, NonZero::new(cli.in_threads).unwrap());
-    reader.start_read_worker();
-    std::thread::scope(|scope| {
-        let (decode_sender, decode_recv) = crossbeam::channel::bounded(1000);
-        for _ in 0..cli.codec_threads {
-            scope.spawn({
-                let recv = recv.clone();
-                let sender = decode_sender.clone();
-                move || {
-                    decode_worker(sender, recv);
-                }
-            });
-        }
-        drop(decode_sender);
-        bam_writer(&cli.get_out_path(), decode_recv, None);
-    });
-}
-
 fn b2g2_with_codec(cli: &Cli) {
     let out_path = cli.get_out_path();
     println!("{:?}", out_path);
@@ -622,7 +570,7 @@ fn b2g2_with_codec(cli: &Cli) {
         drop(bam_record_recv);
 
         let mut writer =
-            v2::RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap());
+            sequential_rw::RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap() , NonZero::new(1024).unwrap());
         let pb = get_spin_pb(format!("writing {:?}", out_path), DEFAULT_INTERVAL);
         for data in write_recv {
             let _ = writer.write_serialized_data(&data);
@@ -661,7 +609,7 @@ fn b2g2_with_codec_lz4(cli: &Cli) {
         drop(bam_record_recv);
 
         let mut writer =
-            v2::RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap());
+            sequential_rw::RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap(), NonZero::new(1024).unwrap());
         let pb = get_spin_pb(format!("writing {:?}", out_path), DEFAULT_INTERVAL);
         for data in write_recv {
             let _ = writer.write_serialized_data(&data);
@@ -700,7 +648,7 @@ fn b2g2(cli: &Cli) {
         drop(bam_record_recv);
 
         let mut writer =
-            v2::RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap());
+            sequential_rw::RffWriter::new_writer(&out_path, NonZero::new(cli.writer_threads).unwrap(), NonZero::new(1024).unwrap());
         let pb = get_spin_pb(format!("writing {:?}", out_path), DEFAULT_INTERVAL);
         for data in write_recv {
             let _ = writer.write_serialized_data(&data);
@@ -718,7 +666,7 @@ fn g2b2(cli: &Cli) {
             let in_path = cli.in_path.clone();
             let threads = cli.in_threads;
             move || {
-                let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(threads).unwrap());
+                let mut reader = sequential_rw::RffReader::new_reader(in_path, NonZero::new(threads).unwrap());
                 while let Some(v) = reader.read_serialized_data() {
                     read_sender.send(v).unwrap();
                 }
@@ -748,7 +696,7 @@ fn g2b2_with_codec(cli: &Cli) {
             let in_path = cli.in_path.clone();
             let threads = cli.in_threads;
             move || {
-                let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(threads).unwrap());
+                let mut reader = sequential_rw::RffReader::new_reader(in_path, NonZero::new(threads).unwrap());
                 while let Some(v) = reader.read_serialized_data() {
                     read_sender.send(v).unwrap();
                 }
@@ -819,7 +767,7 @@ fn g2g(cli: &Cli) {
             let in_threads = cli.in_threads;
             move || {
                 let mut reader =
-                    v2::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
+                    sequential_rw::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
                 while let Some(v) = reader.read_serialized_data() {
                     record_sender.send(v).unwrap();
                 }
@@ -832,7 +780,7 @@ fn g2g(cli: &Cli) {
             move || {
                 let pb = get_spin_pb(format!("writing {}", out_path), DEFAULT_INTERVAL);
                 let mut writer =
-                    v2::RffWriter::new_writer(out_path, NonZero::new(out_threads).unwrap());
+                    sequential_rw::RffWriter::new_writer(out_path, NonZero::new(out_threads).unwrap(), NonZero::new(1024).unwrap());
                 for v in record_recv {
                     let _ = writer.write_serialized_data(&v);
                     pb.inc(1);
@@ -846,7 +794,7 @@ fn g2g(cli: &Cli) {
 fn gread(cli: &Cli) -> Vec<Vec<u8>> {
     let in_path = cli.in_path.clone();
     let in_threads = cli.in_threads;
-    let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
+    let mut reader = sequential_rw::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
     let mut bytes = 0;
     let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
 
@@ -871,7 +819,7 @@ fn gread(cli: &Cli) -> Vec<Vec<u8>> {
 fn gread_and_drop(cli: &Cli) {
     let in_path = cli.in_path.clone();
     let in_threads = cli.in_threads;
-    let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
+    let mut reader = sequential_rw::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
     let mut bytes = 0;
     let pb = get_spin_pb(format!("reading {}", cli.in_path), DEFAULT_INTERVAL);
 
@@ -891,7 +839,7 @@ fn gread_and_drop(cli: &Cli) {
 fn gread2big_buf(cli: &Cli) -> Vec<u8> {
     let in_path = cli.in_path.clone();
     let in_threads = cli.in_threads;
-    let mut reader = v2::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
+    let mut reader = sequential_rw::RffReader::new_reader(in_path, NonZero::new(in_threads).unwrap());
     let mut bytes = 0;
 
     let mut all_data = vec![0_u8; 30 * 1024 * 1024 * 1024];
@@ -916,7 +864,7 @@ fn gread2big_buf(cli: &Cli) -> Vec<u8> {
 pub fn gwrite(cli: &Cli, data: Vec<Vec<u8>>) {
     let pb = get_spin_pb(format!("writing {}", cli.out_path), DEFAULT_INTERVAL);
     let mut writer =
-        v2::RffWriter::new_writer(&cli.out_path, NonZero::new(cli.writer_threads).unwrap());
+        sequential_rw::RffWriter::new_writer(&cli.out_path, NonZero::new(cli.writer_threads).unwrap(), NonZero::new(1024).unwrap());
     let mut bytes = 0;
     let instant = Instant::now();
 
@@ -941,11 +889,9 @@ fn g_read_write(cli: &Cli) {
 fn main() {
     let cli = Cli::parse();
     match cli.mode.as_ref() {
-        "b2g" => b2g(&cli),
         "b2g2" => b2g2(&cli),
         "b2g2-codec" => b2g2_with_codec(&cli),
         "b2g2-codec-lz4" => b2g2_with_codec_lz4(&cli),
-        "g2b" => g2b(&cli),
         "g2b2" => g2b2(&cli),
         "g2b2-codec" => g2b2_with_codec(&cli),
 
