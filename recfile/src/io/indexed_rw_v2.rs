@@ -1,20 +1,15 @@
-use anyhow;
-use memmap2::{self, Mmap};
 use std::{
-    borrow::Cow,
     cell::RefCell,
     cmp,
-    collections::{HashMap, HashSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     hash::Hash,
-    io::{BufRead, BufReader, Write},
+    io::Write,
     num::NonZero,
     os::{
         fd::AsRawFd,
         unix::fs::{FileExt, OpenOptionsExt},
     },
     path::Path,
-    sync::Arc,
 };
 
 use io_uring::{IoUring, opcode, types};
@@ -22,8 +17,7 @@ use io_uring::{IoUring, opcode, types};
 use crate::{
     io::{
         BufferStatus, DataLocation,
-        header::{IndexedRffHeaderV2, IndexedRffReaderHeader},
-        indexed_rw::DataMeta,
+        header::IndexedRffHeaderV2,
         sequential_rw::{SequentialRffReader, SequentialRffWriter},
         tools::encode_to_aligned_vec,
     },

@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "recfile"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "bincode",

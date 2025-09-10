@@ -321,7 +321,7 @@ fn remove_file(fname: &str) {
 }
 
 fn benchmarking_core(
-    tag: &str,
+    _tag: &str,
     fname: &str,
     data: &[u8],
     chunk_size: usize,
