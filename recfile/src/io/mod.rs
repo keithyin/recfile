@@ -2,7 +2,9 @@ use bincode::config::Configuration;
 
 pub mod header;
 pub mod indexed_rw;
+pub mod indexed_rw_v2;
 pub mod sequential_rw;
+pub mod tools;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BufferStatus {

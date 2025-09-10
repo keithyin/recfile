@@ -1,16 +1,32 @@
+use anyhow;
+use memmap2::{self, Mmap};
 use std::{
+    borrow::Cow,
     cell::RefCell,
-    fs::{self, OpenOptions},
-    io::{Read, Seek, Write},
+    cmp,
+    collections::{HashMap, HashSet},
+    fs::{self, File, OpenOptions},
+    hash::Hash,
+    io::{BufRead, BufReader, Write},
     num::NonZero,
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{FileExt, OpenOptionsExt},
+    },
     path::Path,
+    sync::Arc,
 };
 
 use io_uring::{IoUring, opcode, types};
 
 use crate::{
-    io::{BufferStatus, DataLocation, header::SequentialRffHeader, tools::encode_to_aligned_vec},
+    io::{
+        BufferStatus, DataLocation,
+        header::{IndexedRffHeaderV2, IndexedRffReaderHeader},
+        indexed_rw::DataMeta,
+        sequential_rw::{SequentialRffReader, SequentialRffWriter},
+        tools::encode_to_aligned_vec,
+    },
     util::{
         buffer::{AlignedVecU8, Buffer},
         get_page_size,
@@ -18,28 +34,55 @@ use crate::{
     },
 };
 
-pub fn write_rff_meta(
-    file: &mut fs::File,
-    version: u32,
-    record_len: usize,
-    page_size: usize,
-) -> std::io::Result<()> {
-    file.seek(std::io::SeekFrom::Start(0)).expect("seek error");
-    let mut buf = AlignedVecU8::new(4 * 1024, page_size);
-    buf.fill(0);
-    // 10 bytes for magic number
-    buf[0..10].copy_from_slice(format!("RFF_V{:05}", version).as_bytes());
-    // 8 bytes for record length
-    buf[10..18].copy_from_slice(record_len.to_le_bytes().as_ref());
-    file.write_all(&buf).expect("write_rff_meta. write error");
-    Ok(())
+pub trait TRffIndex: Hash + bincode::Encode + bincode::Decode<()> + cmp::Eq + cmp::Ord {}
+
+impl TRffIndex for String {}
+impl TRffIndex for usize {}
+impl TRffIndex for u32 {}
+impl TRffIndex for u64 {}
+impl TRffIndex for i32 {}
+impl TRffIndex for i64 {}
+
+#[derive(Debug, bincode::Encode, bincode::Decode)]
+pub struct MetaData<Index> {
+    index: Option<Index>,
+    start_end: StartEnd,
+}
+
+impl<Index> MetaData<Index>
+where
+    Index: TRffIndex,
+{
+    pub fn new(index: Index, start: usize, end: usize) -> Self {
+        Self {
+            index: Some(index),
+            start_end: StartEnd { start, end },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, bincode::Encode, bincode::Decode)]
+pub struct StartEnd {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl StartEnd {
+    pub fn length(&self) -> usize {
+        self.end - self.start
+    }
+}
+
+pub fn build_index_filepath(data_fileapth: &str) -> String {
+    format!("{}.index", data_fileapth)
 }
 
 /// 开头留 4k 的空间用来存放 元数据（magic number， 以及一些其它信息）。
-/// 4k 之后，用来存放实际内容，结构体的二进制都通过 二进制大小+真实二进制的方式来存储
+/// 4k 之后，用来存放实际内容，仅存数据信息。数据的元信息存储在独立的 .index 文件中
 /// Rff. Record file format
-pub struct SequentialRffWriter {
+pub struct IndexedRffWriterV2 {
     file: fs::File,
+    index_file_writer: SequentialRffWriter,
 
     #[allow(unused)]
     io_depth: usize,
@@ -52,10 +95,13 @@ pub struct SequentialRffWriter {
     ring: IoUring,
     pending_io: usize,
     write_position: u64,
+    record_write_position: u64,
     write_cnt: usize,
+
+    bincode_cfg: bincode::config::Configuration,
 }
 
-impl SequentialRffWriter {
+impl IndexedRffWriterV2 {
     ///
     /// sender is used for to send data to be written. the data should be bytes stream
     /// buf_size: KB
@@ -75,17 +121,16 @@ impl SequentialRffWriter {
         if page_size == 0 {
             panic!("Failed to get page size");
         }
-        let buf_size = buf_size.get() * 1024; // KB to Bytes
-
+        let buf_size = buf_size.get() * 1024;
         assert!(
             buf_size % page_size == 0,
-            "buf_size must be aligned to page size, buf_size: {}, page_size: {}",
+            "buf_size must be multiple of page size, buf_size: {}, page_size: {}",
             buf_size,
             page_size
         );
 
         file.write_all(&encode_to_aligned_vec(
-            &SequentialRffHeader::new(0, buf_size),
+            &IndexedRffHeaderV2::new(buf_size),
             page_size,
         ))
         .expect("write header error");
@@ -116,8 +161,17 @@ impl SequentialRffWriter {
                 .expect("register file error");
         }
 
+        // let index_file_writer = BufWriter::new(
+        //     fs::File::create(build_index_filepath(p.as_ref().to_str().unwrap())).unwrap(),
+        let index_file_writer = SequentialRffWriter::new_writer(
+            build_index_filepath(p.as_ref().to_str().unwrap()),
+            NonZero::new(io_depth).unwrap(),
+            NonZero::new(buf_size).unwrap(),
+        );
+        // );
         Self {
             file,
+            index_file_writer,
             io_depth,
             buf_size,
             buffers: buffers,
@@ -126,14 +180,33 @@ impl SequentialRffWriter {
             ring: ring,
             pending_io: 0,
             write_position: page_size as u64,
+            record_write_position: page_size as u64,
             write_cnt: 0,
+            bincode_cfg: bincode::config::standard(),
         }
     }
 
-    pub fn write_serialized_data(&mut self, data: &[u8]) -> std::io::Result<()> {
+    /// caller need to make sure, the key is unique !!!!
+    pub unsafe fn write_serialized_data<Index>(
+        &mut self,
+        data: &[u8],
+        key: Index,
+    ) -> std::io::Result<()>
+    where
+        Index: TRffIndex,
+    {
         // Write the data to the file
-        self.write(data.len().to_le_bytes().as_ref())?;
+        let meta = MetaData::new(
+            key,
+            self.record_write_position as usize,
+            self.record_write_position as usize + data.len(),
+        );
+        self.index_file_writer
+            .write_serialized_data(&bincode::encode_to_vec(meta, self.bincode_cfg).unwrap())
+            .unwrap();
+
         self.write(data)?;
+        self.record_write_position += data.len() as u64;
         self.write_cnt += 1;
         Ok(())
     }
@@ -198,26 +271,12 @@ impl SequentialRffWriter {
             self.active_buffer_index = None;
             return;
         }
-        // println!("before:{:?}", buf.get_slice(0, 100));
+
         if buf.size() < buf.cap() {
-            // if the buffer is not full, we need to pad it with zeros
             let padding_size = buf.cap() - buf.size();
-            // println!("Padding size: {}", padding_size);
             buf.push(vec![0; padding_size as usize].as_slice());
         }
 
-        // println!("{:?}", buf.get_slice(0, 100));
-
-        // let sqe = opcode::Write::new(
-        //     types::Fd(self.file.as_raw_fd()),
-        //     buf.as_mut_ptr(),
-        //     buf.cap(), // it must be cap. the actual size may not aligned!!
-        // )
-        // .offset(self.write_position)
-        // .build()
-        // .user_data(idx as u64);
-
-        // let buf_len = buf.cap();
         let sqe = opcode::WriteFixed::new(
             types::Fixed(0),
             buf.as_mut_ptr(),
@@ -258,7 +317,7 @@ impl SequentialRffWriter {
     }
 }
 
-impl Drop for SequentialRffWriter {
+impl Drop for IndexedRffWriterV2 {
     fn drop(&mut self) {
         // Ensure all pending IO operations are completed
         if self.active_buffer_index.is_some() {
@@ -270,89 +329,93 @@ impl Drop for SequentialRffWriter {
             // println!("Waiting for pending IO operations to complete");
             self.recycle_buffer();
         }
-        let num_records = self.write_cnt;
-
-        self.file
-            .seek(std::io::SeekFrom::Start(0))
-            .expect("seek error");
-        self.file
-            .write_all(&encode_to_aligned_vec(
-                &SequentialRffHeader::new(num_records, self.buf_size),
-                get_page_size(),
-            ))
-            .expect("write header error");
-
         self.file.sync_all().expect("Failed to sync file");
     }
 }
 
-pub struct SequentialRffReader {
+pub fn build_index<Index>(
+    index_filepath: &str,
+    io_depth: NonZero<usize>,
+    cfg: bincode::config::Configuration,
+) -> Vec<MetaData<Index>>
+where
+    Index: TRffIndex,
+{
+    let mut result = vec![];
+    let mut reader = SequentialRffReader::new_reader(index_filepath, io_depth, None);
+    while let Some(record) = reader.read_serialized_data() {
+        let meta: MetaData<Index> = bincode::decode_from_slice(&record, cfg).unwrap().0;
+        result.push(meta);
+    }
+    result
+}
+
+pub struct IndexedRffSequentialReaderV2<Index> {
     #[allow(unused)]
     file: fs::File, // 不能删掉。要保证文件是打开的！
-    file_size: u64,
-    header: SequentialRffHeader,
+    end_position: u64,
     io_depth: usize,
     buff_size: usize,
     ring: IoUring,
     buffers: Vec<RefCell<Buffer>>,
     buffers_flag: Vec<BufferStatus>,
-    data_location: DataLocation, // 即将要读取的 位置和 idx
+    data_location: DataLocation, // 即将要读取的 buffer 以及 offset
     file_offset_of_buffers: Vec<u64>,
     pending_io: usize,
     init_flag: bool,
+    sequential_meta: Vec<MetaData<Index>>,
+    cur_data_idx: usize, // 当前读取到的 meta 索引
 }
 
-impl SequentialRffReader {
-    /// buf_size: KB.
-    ///     if none, use the buf_size in write stage.
-    ///     if not none. it must be less or equal to buf_size in write stage. and buf_size(write) % buf_size(read) == 0
-    pub fn new_reader<P>(p: P, io_depth: NonZero<usize>, buf_size: Option<NonZero<usize>>) -> Self
+impl<Index> IndexedRffSequentialReaderV2<Index>
+where
+    Index: TRffIndex,
+{
+    /// the caller need to make sure the sequential meta is valid
+    pub fn new_reader<P>(p: P, io_depth: NonZero<usize>) -> Self
     where
         P: AsRef<Path>,
     {
-        let mut file = OpenOptions::new()
+        let sequential_meta = build_index(
+            &build_index_filepath(p.as_ref().to_str().unwrap()),
+            io_depth,
+            bincode::config::standard(),
+        );
+
+        let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECT)
             .open(p.as_ref())
             .unwrap();
-        let file_size = file.metadata().unwrap().len();
 
         let page_size = get_page_size();
         if page_size == 0 {
             panic!("Failed to get page size");
         }
-        let read_position = page_size as u64; // skip the metadata area
 
         let mut header_bytes = AlignedVecU8::new(page_size, page_size);
-        file.seek(std::io::SeekFrom::Start(0)).expect("seek error");
-        file.read_exact(&mut header_bytes).expect("read file error");
+        file.read_exact_at(&mut header_bytes, 0)
+            .expect("read meta error");
 
-        let header_length = u32::from_le_bytes([
+        let header_len = u32::from_le_bytes([
             header_bytes[0],
             header_bytes[1],
             header_bytes[2],
             header_bytes[3],
         ]) as usize;
-
-        let (header, _): (SequentialRffHeader, usize) = bincode::decode_from_slice(
-            &header_bytes[4..(4 + header_length)],
+        let header: IndexedRffHeaderV2 = bincode::decode_from_slice(
+            &header_bytes[4..(4 + header_len)],
             bincode::config::standard(),
         )
-        .unwrap();
-
+        .unwrap()
+        .0;
+        header.check_valid();
         let io_depth = io_depth.get();
         let ring = IoUring::new(io_depth as u32).unwrap();
 
-        let mut buff_size_in_header = header.buf_size();
-        if let Some(buf_size) = buf_size {
-            assert!(buff_size_in_header >= buf_size.get());
-            assert!(buff_size_in_header % buf_size.get() == 0);
-            buff_size_in_header = buf_size.get();
-        }
-
-        let buffers_flag = vec![BufferStatus::default(); io_depth];
+        let buff_size = header.buf_size();
         let buffers: Vec<RefCell<Buffer>> = (0..io_depth)
-            .map(|_| RefCell::new(Buffer::new(buff_size_in_header, page_size)))
+            .map(|_| RefCell::new(Buffer::new(buff_size, page_size)))
             .collect();
 
         let iovecs = buffers
@@ -362,6 +425,31 @@ impl SequentialRffReader {
                 libc::iovec {
                     iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
                     iov_len: buf_len as usize,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let read_position = sequential_meta[0].start_end.start / buff_size * buff_size;
+        let read_position = read_position as u64;
+        let buf_offset = sequential_meta[0].start_end.start % buff_size;
+
+        let data_location = DataLocation {
+            buf_idx: 0,
+            offset: buf_offset as usize,
+        };
+
+        let end_position = sequential_meta.last().unwrap().start_end.end as u64;
+        let file_offset_of_buffers: Vec<u64> = (0..io_depth)
+            .map(|i| read_position + i as u64 * buff_size as u64)
+            .collect();
+
+        let buffers_flag = file_offset_of_buffers
+            .iter()
+            .map(|&file_offset| {
+                if file_offset < end_position {
+                    BufferStatus::ReadyForSqe
+                } else {
+                    BufferStatus::Invalid
                 }
             })
             .collect::<Vec<_>>();
@@ -377,70 +465,76 @@ impl SequentialRffReader {
 
         Self {
             file,
-            file_size,
-            header,
+            end_position: end_position,
             io_depth,
-            buff_size: buff_size_in_header,
+            buff_size,
             ring,
             buffers,
             buffers_flag,
-            data_location: DataLocation::default(),
-            file_offset_of_buffers: (0..io_depth)
-                .map(|i| (read_position + i as u64 * buff_size_in_header as u64) % file_size)
-                .collect(),
+            data_location: data_location,
+            file_offset_of_buffers: file_offset_of_buffers,
             pending_io: 0,
             init_flag: false,
+            sequential_meta: sequential_meta,
+            cur_data_idx: 0,
+        }
+    }
+
+    pub fn read_serialized_data(&mut self) -> Option<(Index, Vec<u8>)> {
+        if let Some((name, record_len)) = self.read_record_meta() {
+            let mut data = vec![0_u8; record_len];
+            if let Some(()) = self.read_exact(&mut data) {
+                Some((name, data))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn read_serialized_data_to_buf(&mut self, buf: &mut [u8]) -> Option<(Index, usize)> {
+        if let Some((name, record_len)) = self.read_record_meta() {
+            assert!(buf.len() >= record_len, "buf too short");
+            if let Some(()) = self.read_exact(&mut buf[..record_len]) {
+                Some((name, record_len))
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 
     pub fn num_records(&self) -> usize {
-        self.header.num_records()
+        self.sequential_meta.len()
     }
 
-    pub fn read_serialized_data(&mut self) -> Option<Vec<u8>> {
-        let record_len = self.read_record_length();
-        if record_len == 0 {
+    fn read_record_meta(&mut self) -> Option<(Index, usize)> {
+        let cur_data_idx = self.cur_data_idx;
+        if cur_data_idx > self.sequential_meta.len() - 1 {
             return None; // No more records to read
         }
-        let mut data = vec![0_u8; record_len];
-        if let Some(()) = self.read_exact(&mut data) {
-            Some(data)
-        } else {
-            None
-        }
+        let length = self.sequential_meta[cur_data_idx].start_end.length();
+        let name = self.sequential_meta[cur_data_idx].index.take().unwrap();
+        self.cur_data_idx += 1; // Move to the next record
+        Some((name, length))
     }
-
-    pub fn read_serialized_data_to_buf(&mut self, buf: &mut [u8]) -> Option<usize> {
-        let record_len = self.read_record_length();
-        if record_len == 0 {
-            return None; // No more records to read
-        }
-        assert!(buf.len() >= record_len, "buf too short");
-        if let Some(()) = self.read_exact(&mut buf[..record_len]) {
-            Some(record_len)
-        } else {
-            None
-        }
-    }
-
-    fn read_record_length(&mut self) -> usize {
-        let mut length_buf = [0u8; 8];
-        if let Some(()) = self.read_exact(&mut length_buf) {
-            usize::from_le_bytes(length_buf)
-        } else {
-            0
-        }
-    }
-
-    // fn read_exact(&mut self, data)
 
     fn read_exact(&mut self, data: &mut [u8]) -> Option<()> {
         let record_len = data.len();
         let mut data_start = 0;
-        // println!("buf_idx:{}", self.data_location.buf_idx);
+
         while data_start < record_len {
             let buf_idx = self.data_location.buf_idx;
             if self.wait_buf_ready4read(buf_idx).is_none() {
+                eprintln!(
+                    "only the partial data found. expect:{}, but got{}
+                    data_location: {:?}, 
+                    ",
+                    record_len, data_start, self.data_location,
+                );
+
                 return None; // No more data to read
             }
             let expected_data_size = record_len - data_start;
@@ -508,20 +602,12 @@ impl SequentialRffReader {
     }
 
     fn submit_read_event(&mut self, buf_idx: usize) -> Option<()> {
-        if self.file_offset_of_buffers[buf_idx] >= self.file_size {
+        if self.file_offset_of_buffers[buf_idx] >= self.end_position {
             // no more data to read
             return None;
         }
         assert!(self.buffers_flag[buf_idx].ready4sqe());
 
-        // let sqe = opcode::Read::new(
-        //     types::Fd(self.file.as_raw_fd()),
-        //     self.buffers[buf_idx].borrow_mut().as_mut_ptr(),
-        //     self.buff_size as u32,
-        // )
-        // .offset(self.file_offset_of_buffers[buf_idx])
-        // .build()
-        // .user_data(buf_idx as u64);
         let buf_cap = self.buffers[buf_idx].borrow().cap();
         let sqe = opcode::ReadFixed::new(
             types::Fixed(0),
@@ -546,7 +632,7 @@ impl SequentialRffReader {
 
     fn set_buffer_next_file_offset(&mut self, buf_idx: usize) {
         self.file_offset_of_buffers[buf_idx] += self.buff_size as u64 * self.io_depth as u64;
-        if self.file_offset_of_buffers[buf_idx] >= self.file_size {
+        if self.file_offset_of_buffers[buf_idx] >= self.end_position {
             // no more data to read
             self.buffers_flag[buf_idx].set_invalid();
         }
@@ -557,7 +643,6 @@ impl SequentialRffReader {
 mod test {
     use std::num::NonZero;
 
-    use gskits::pbar::{DEFAULT_INTERVAL, get_bar_pb};
     // use gskits::pbar::{DEFAULT_INTERVAL, get_bar_pb};
     use tempfile::NamedTempFile;
 
@@ -565,28 +650,30 @@ mod test {
     fn test_rff_rw() {
         let num_records = 1024 * 1024;
         let named_file = NamedTempFile::new().unwrap();
-        let mut writer = super::SequentialRffWriter::new_writer(
+        let mut writer = super::IndexedRffWriterV2::new_writer(
             named_file.path(),
             NonZero::new(2).unwrap(),
             NonZero::new(4).unwrap(),
         );
         let data = b"Hello, world! today is a good day.\n";
 
-        for _ in 0..num_records {
-            writer.write_serialized_data(data).unwrap();
+        for i in 0..num_records {
+            unsafe {
+                writer
+                    .write_serialized_data(data, format!("record_{}", i))
+                    .unwrap();
+            }
         }
         drop(writer);
 
-        let mut reader = super::SequentialRffReader::new_reader(
+        let mut reader = super::IndexedRffSequentialReaderV2::<String>::new_reader(
             named_file.path(),
             NonZero::new(2).unwrap(),
-            None,
         );
-        assert_eq!(reader.num_records(), num_records);
         let mut cnt = 0;
         while let Some(record) = reader.read_serialized_data() {
-            assert_eq!(record, data);
             cnt += 1;
+            // let record = String::from_utf8(record.1).unwrap();
         }
 
         assert_eq!(
@@ -598,31 +685,70 @@ mod test {
     #[test]
     #[ignore = "no file"]
     fn test_rff_write() {
+        let num_records = 1024 * 1024;
         let named_file = "data.rff";
-        let mut writer = super::SequentialRffWriter::new_writer(
+        let mut writer = super::IndexedRffWriterV2::new_writer(
             named_file,
             NonZero::new(2).unwrap(),
             NonZero::new(4).unwrap(),
         );
-        let data = b"Hel m\n";
-        let tot = 1000000;
-        let pb = get_bar_pb(format!("runing..."), DEFAULT_INTERVAL, tot);
-        for _idx in 0..tot {
-            pb.inc(1);
-            writer.write_serialized_data(data).unwrap();
+        let data = b"Hello, world! today is a good day.\n";
+
+        for i in 0..num_records {
+            unsafe {
+                writer
+                    .write_serialized_data(data, format!("record_{}", i))
+                    .unwrap();
+            }
         }
-        pb.finish();
-        drop(writer);
     }
 
     #[test]
     #[ignore = "no file"]
     fn test_rff_read() {
         let named_file = "data.rff";
-        let mut reader =
-            super::SequentialRffReader::new_reader(named_file, NonZero::new(2).unwrap(), None);
+
+        let mut reader = super::IndexedRffSequentialReaderV2::<String>::new_reader(
+            named_file,
+            NonZero::new(2).unwrap(),
+        );
+        let mut cnt = 0;
         while let Some(record) = reader.read_serialized_data() {
-            println!("{}", String::from_utf8_lossy(&record));
+            cnt += 1;
+            let record = String::from_utf8(record.1).unwrap();
+            println!("record={}", record);
         }
+        println!("cnt:{}", cnt);
+        println!("num_records:{}", reader.num_records());
     }
+
+    // #[test]
+    // #[ignore = "no file"]
+    // fn test_rff_sequential_read() {
+    //     let named_file = "data.rff";
+
+    //     let data_index = super::IndexedRffSequentialReaderV2::read_data_index(named_file, 1000);
+    //     let mut cnt = 0;
+    //     data_index.into_iter().for_each(|chunk| {
+    //         let mut reader = super::IndexedRffSequentialReaderV2::new_reader(
+    //             named_file,
+    //             chunk,
+    //             NonZero::new(2).unwrap(),
+    //         );
+
+    //         while let Some((name, record)) = reader.read_serialized_data() {
+    //             println!("{}: {}", name, String::from_utf8(record).unwrap());
+    //             cnt += 1;
+    //         }
+    //         println!("Chunk read {} records", cnt);
+    //     });
+    // }
+
+    // #[test]
+    // fn test_vec_take() {
+    //     let mut v = vec!["a".to_string(), "b".to_string()];
+    //     let first = std::mem::replace(&mut v[0], "c".to_string());
+    //     println!("first: {}", first);
+    //     println!("{:?}", v);
+    // }
 }

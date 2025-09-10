@@ -37,7 +37,7 @@ impl Cli {
 
 fn write(cli: &Cli) {
     let mut writer =
-        sequential_rw::RffWriter::new_writer(cli.get_out_path(), NonZero::new(cli.io_depth).unwrap(), NonZero::new(1024).unwrap());
+        sequential_rw::SequentialRffWriter::new_writer(cli.get_out_path(), NonZero::new(cli.io_depth).unwrap(), NonZero::new(1024).unwrap());
     let data = vec!['A' as u8; cli.chunk_size.unwrap_or(1024 * 1024)];
     let tot_size = data.len() * cli.rep_times.expect("rep times must be set");
     let pb = get_bar_pb(
@@ -60,7 +60,7 @@ fn write(cli: &Cli) {
 
 fn read(cli: &Cli) {
     let mut reader =
-        sequential_rw::RffReader::new_reader(cli.get_in_path(), NonZero::new(cli.io_depth).unwrap());
+        sequential_rw::SequentialRffReader::new_reader(cli.get_in_path(), NonZero::new(cli.io_depth).unwrap(), None);
     let pb = get_spin_pb("reading".to_string(), DEFAULT_INTERVAL);
     let mut tot_size = 0;
     let instant = std::time::Instant::now();
