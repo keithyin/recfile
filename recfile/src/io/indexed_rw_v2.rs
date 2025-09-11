@@ -53,6 +53,14 @@ where
             start_end: StartEnd { start, end },
         }
     }
+
+    pub fn index(&self) -> &Option<Index> {
+        &self.index
+    }
+
+    pub fn start_end(&self) -> &StartEnd {
+        &self.start_end
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, bincode::Encode, bincode::Decode)]
@@ -508,6 +516,10 @@ where
 
     pub fn num_records(&self) -> usize {
         self.sequential_meta.len()
+    }
+
+    pub fn sequential_meta(&self) -> &Vec<MetaData<Index>> {
+        &self.sequential_meta
     }
 
     fn read_record_meta(&mut self) -> Option<(Index, usize)> {
