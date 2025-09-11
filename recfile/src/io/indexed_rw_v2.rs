@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     cell::RefCell,
     cmp,
     fs::{self, OpenOptions},
@@ -206,7 +207,9 @@ impl IndexedRffWriterV2 {
     }
 
     fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
-        // println!("write here");
+        if data.len() == 0 {
+            return Ok(());
+        }
 
         let mut data_start = 0;
         let data_end = data.len();
@@ -476,6 +479,10 @@ where
 
     pub fn read_serialized_data(&mut self) -> Option<(Index, Vec<u8>)> {
         if let Some((name, record_len)) = self.read_record_meta() {
+            if record_len == 0 {
+                return Some((name, vec![]));
+            }
+            
             let mut data = vec![0_u8; record_len];
             if let Some(()) = self.read_exact(&mut data) {
                 Some((name, data))
