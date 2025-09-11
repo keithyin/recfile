@@ -1,5 +1,4 @@
 use std::{
-    any::Any,
     cell::RefCell,
     cmp,
     fs::{self, OpenOptions},
@@ -482,7 +481,7 @@ where
             if record_len == 0 {
                 return Some((name, vec![]));
             }
-            
+
             let mut data = vec![0_u8; record_len];
             if let Some(()) = self.read_exact(&mut data) {
                 Some((name, data))
